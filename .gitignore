@@ -1,0 +1,35 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+dist/
+build/
+*.egg-info/
+
+# IDE and OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Private/runtime data
+data/private/
+data/raw/
+*.db
+*.sqlite
+*.sqlite3
+logs/
+artifacts/
+models/
+
+# Frontend
+node_modules/
+

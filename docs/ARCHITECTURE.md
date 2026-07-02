@@ -1,0 +1,117 @@
+# 模块架构
+
+## 1. 架构原则
+
+- 业务逻辑不依赖具体模型厂商、数据库或行情供应商。
+- LLM 负责理解、规划和生成；数值计算、权限与规则由普通代码负责。
+- Agent 只能通过工具访问外部世界，所有工具调用均可记录、重放和测试。
+- 先采用模块化单体，等边界稳定后再考虑拆服务。
+
+## 2. 逻辑架构
+
+```mermaid
+flowchart LR
+    UI["CLI / Web UI"] --> API["FastAPI 应用层"]
+    API --> WF["Agent 工作流"]
+    WF --> CTX["上下文构建器"]
+    WF --> LLM["模型网关"]
+    WF --> TOOLS["工具注册表"]
+    WF --> MEM["记忆服务"]
+    WF --> SAFE["规则与人工确认"]
+    TOOLS --> MARKET["行情/基金/黄金适配器"]
+    TOOLS --> NEWS["新闻与宏观数据适配器"]
+    TOOLS --> PORT["资产与风险计算器"]
+    TOOLS --> MCP["MCP Client"]
+    CTX --> RAG["检索与重排"]
+    MEM --> DB["SQLite → PostgreSQL"]
+    RAG --> VDB["本地向量存储 → Qdrant"]
+    WF --> OBS["日志 / Trace / 评测"]
+```
+
+## 3. 计划中的目录
+
+```text
+xmz-agent/
+├─ apps/
+│  ├─ api/                 # FastAPI 入口
+│  ├─ cli/                 # 第一阶段命令行入口
+│  └─ web/                 # 后期前端
+├─ src/finagent/
+│  ├─ core/                # 配置、通用 Schema、异常、事件
+│  ├─ llm/                 # ModelProvider 接口、云端/本地适配器、路由
+│  ├─ agents/              # Agent 定义与提示词
+│  ├─ workflows/           # 可恢复的状态图与人工确认
+│  ├─ tools/               # 工具协议、注册表、权限、具体工具
+│  ├─ portfolio/           # 持仓、估值、暴露与风险计算
+│  ├─ data/                # 行情/新闻/宏观数据源适配器
+│  ├─ memory/              # 会话、用户偏好、情景/语义记忆
+│  ├─ rag/                 # 采集、切分、索引、检索、重排、引用
+│  ├─ context/             # 上下文选择、压缩、预算与缓存
+│  ├─ mcp/                 # MCP Server 与 Client
+│  ├─ guardrails/          # 输入输出校验、风险规则、批准策略
+│  ├─ observability/       # 日志、指标、Trace、成本统计
+│  └─ evaluation/          # 数据集、打分器与历史回放
+├─ tests/
+│  ├─ unit/
+│  ├─ integration/
+│  ├─ contract/
+│  └─ eval/
+├─ docs/
+│  └─ learning-journal/
+├─ data/
+│  ├─ samples/             # 可提交的匿名样例
+│  └─ private/             # 永不提交的个人数据
+├─ scripts/
+├─ .github/workflows/
+├─ pyproject.toml
+├─ .env.example
+└─ README.md
+```
+
+## 4. 关键接口
+
+后续优先稳定接口，而不是先堆实现：
+
+```python
+class ModelProvider(Protocol):
+    async def generate(self, request: ModelRequest) -> ModelResponse: ...
+
+class MarketDataProvider(Protocol):
+    async def get_quote(self, symbol: str) -> Quote: ...
+
+class Retriever(Protocol):
+    async def search(self, query: SearchQuery) -> list[Evidence]: ...
+
+class MemoryStore(Protocol):
+    async def save(self, memory: MemoryItem) -> None: ...
+    async def search(self, query: MemoryQuery) -> list[MemoryItem]: ...
+```
+
+这样可以独立替换模型、行情源、数据库和向量库，并对每个模块做假实现和契约测试。
+
+## 5. 推荐技术栈
+
+| 层 | 起步方案 | 进阶方案 | 学习目的 |
+|---|---|---|---|
+| 语言与工程 | Python、uv、Pydantic、pytest | Ruff、mypy、pre-commit | 类型、依赖、测试与代码质量 |
+| 接口与 UI | CLI | FastAPI、Streamlit 或轻量 Web 前端 | API 设计、流式输出、异步编程 |
+| Agent | 自写最小 ReAct 循环 | LangGraph 状态工作流 | 先懂原理，再学可靠编排 |
+| 模型 | 一种 OpenAI-compatible 云 API | 多供应商网关、Ollama、本地模型 | 结构化输出、路由、降级、成本 |
+| 数据库 | SQLite + SQLAlchemy | PostgreSQL + Alembic | 持久化、事务、迁移 |
+| RAG | 本地向量索引 | Qdrant 混合检索 + 重排 | ingestion、召回、引用、评测 |
+| 任务 | 手动触发 | APScheduler；需要时再引入队列 | 定时简报、失败重试、幂等性 |
+| 协议 | 普通 Python 工具 | 官方 MCP Python SDK | 工具发现与跨应用复用 |
+| 可观测性 | 结构化日志 | OpenTelemetry / Langfuse 类平台 | Trace、延迟、token、成本与错误 |
+| 交付 | 本地运行 | Docker Compose、GitHub Actions | 可复现环境和自动化质量门禁 |
+
+框架不是越多越好。主线只选一套，其他框架作为对比实验写进学习日记。
+
+## 6. 数据与安全约束
+
+- `Quote` 至少包含 `symbol`、`price`、`currency`、`market_time`、`source`。
+- 过期或来源不明的数据不得被表述为实时事实。
+- 原始文档、切分片段、引用和生成结论使用不同数据表。
+- 调仓建议使用结构化 Schema，并经过规则检查与人工批准节点。
+- MCP 工具采用最小权限、参数白名单、超时和审计日志。
+- 个人持仓、Key、数据库文件和模型缓存加入 `.gitignore`。
+
