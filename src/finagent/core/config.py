@@ -6,6 +6,7 @@
 """
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import AnyHttpUrl, Field, SecretStr, field_validator
@@ -13,6 +14,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Literal 会同时约束运行时配置和静态类型，避免把拼写错误悄悄传到 API 请求中。
 ProviderName = Literal["bailian"]
+
+# 不能直接使用相对路径 ".env"：相对路径会以进程的当前工作目录为基准，而 PyCharm
+# 运行 scripts 下的文件时，工作目录可能不是项目根目录。根据当前源码文件反向定位
+# 项目根目录后，无论从 PyCharm、CMD、pytest 还是安装后的命令入口启动，开发环境的
+# 配置文件位置都保持一致。
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+ENV_FILE = PROJECT_ROOT / ".env"
 
 
 class Settings(BaseSettings):
@@ -34,7 +42,7 @@ class Settings(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=ENV_FILE,
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
