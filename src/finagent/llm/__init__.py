@@ -5,7 +5,16 @@
 只需新增或替换 Provider 适配器，不必修改 Agent 的核心流程。
 """
 
+from finagent.llm.bailian import BailianModelProvider
 from finagent.llm.base import ModelProvider
+from finagent.llm.errors import (
+    ModelAuthenticationError,
+    ModelConnectionError,
+    ModelProviderError,
+    ModelRateLimitError,
+    ModelResponseError,
+    ModelTimeoutError,
+)
 from finagent.llm.schemas import (
     FinishReason,
     Message,
@@ -19,9 +28,16 @@ from finagent.llm.schemas import (
 
 __all__ = [
     "FinishReason",
+    "BailianModelProvider",
     "Message",
     "MessageRole",
     "ModelProvider",
+    "ModelAuthenticationError",
+    "ModelConnectionError",
+    "ModelProviderError",
+    "ModelRateLimitError",
+    "ModelResponseError",
+    "ModelTimeoutError",
     "ModelRequest",
     "ModelResponse",
     "TokenUsage",
