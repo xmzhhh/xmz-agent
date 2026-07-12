@@ -1,6 +1,7 @@
 """FinAgent 工具层的公共接口。"""
 
 from finagent.tools.base import BaseTool, ToolInput, ToolResult
+from finagent.tools.defaults import create_default_tool_registry
 from finagent.tools.errors import (
     DuplicateToolError,
     ToolError,
@@ -23,4 +24,5 @@ __all__ = [
     "ToolRegistry",
     "ToolResult",
     "ToolValidationError",
+    "create_default_tool_registry",
 ]

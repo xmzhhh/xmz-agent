@@ -135,6 +135,7 @@ async def test_tool_result_can_be_serialized_for_future_tool_message() -> None:
     message_content = result.to_message_content()
 
     assert json.loads(message_content) == {
+        "ok": True,
         "tool_name": "calculate_position_ratio",
         "data": {
             "position_value": 2500.0,

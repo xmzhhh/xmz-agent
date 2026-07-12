@@ -9,7 +9,7 @@ from collections.abc import Iterator
 import pytest
 
 from finagent.cli import DEFAULT_SYSTEM_PROMPT, main, run_chat
-from finagent.llm import ModelRequest, ModelResponse
+from finagent.llm import MessageRole, ModelRequest, ModelResponse, ToolCall
 
 
 class FakeProvider:
@@ -28,6 +28,36 @@ class FakeProvider:
 
     async def close(self) -> None:
         """记录资源关闭动作，验证 CLI 不会泄漏连接。"""
+
+        self.closed = True
+
+
+class ToolCallingProvider:
+    """先请求仓位工具、再返回自然语言回答的假 Provider。"""
+
+    def __init__(self) -> None:
+        self.requests: list[ModelRequest] = []
+        self.closed = False
+
+    async def generate(self, request: ModelRequest) -> ModelResponse:
+        """根据调用次数模拟 Function Calling 的两个模型步骤。"""
+
+        self.requests.append(request)
+        if len(self.requests) == 1:
+            return ModelResponse(
+                model="fake-model",
+                tool_calls=(
+                    ToolCall(
+                        id="call-cli-ratio",
+                        name="calculate_position_ratio",
+                        arguments={"position_value": 2000, "total_assets": 10000},
+                    ),
+                ),
+            )
+        return ModelResponse(model="fake-model", content="该项资产仓位为 20%。")
+
+    async def close(self) -> None:
+        """记录 CLI 是否正确释放 Provider。"""
 
         self.closed = True
 
@@ -107,4 +137,25 @@ async def test_run_chat_treats_keyboard_interrupt_as_normal_exit() -> None:
     await run_chat(provider, input_func=interrupt, output_func=outputs.append)
 
     assert outputs[-1] == "\n会话已结束。"
+    assert provider.closed is True
+
+
+@pytest.mark.asyncio
+async def test_run_chat_executes_model_requested_tool() -> None:
+    """CLI 应通过 Agent 完成工具回传并展示最终回答，而不是暴露中间 ToolCall。"""
+
+    provider = ToolCallingProvider()
+    inputs = input_from(["2000 元持仓占 10000 元总资产的比例是多少？", "exit"])
+    outputs: list[str] = []
+
+    await run_chat(
+        provider,
+        input_func=lambda _prompt: next(inputs),
+        output_func=outputs.append,
+    )
+
+    assert len(provider.requests) == 2
+    assert provider.requests[1].messages[-1].role is MessageRole.TOOL
+    assert provider.requests[1].messages[-1].tool_call_id == "call-cli-ratio"
+    assert "FinAgent：该项资产仓位为 20%。" in outputs
     assert provider.closed is True

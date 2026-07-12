@@ -6,7 +6,7 @@
 """
 
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
@@ -28,6 +28,7 @@ class ToolResult(BaseModel):
     """一次工具成功执行后的标准结果。
 
     Attributes:
+        ok: 固定为 ``True``，让模型能用同一字段区分成功和失败工具结果。
         tool_name: 实际执行的工具名称，便于日志、回放与审计。
         data: 可被序列化为 JSON 的业务结果。当前用 ``Any`` 保留不同工具的扩展能力，
             具体工具仍应只返回 JSON 兼容的值。
@@ -37,6 +38,7 @@ class ToolResult(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    ok: Literal[True] = True
     tool_name: str
     data: dict[str, Any]
 
