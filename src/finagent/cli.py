@@ -1,7 +1,8 @@
 """FinAgent 命令行入口。
 
-CLI 只负责解析命令、接收用户输入和展示结果；多轮历史由 ``ChatSession`` 管理，模型
-厂商差异由 Provider 管理。保持入口层轻量，可以避免界面代码与核心业务相互耦合。
+CLI 只负责解析命令、接收用户输入和展示结果；多轮历史与工具循环由
+``ToolCallingAgent`` 管理，模型厂商差异由 Provider 管理。保持入口层轻量，可以避免
+界面代码与核心业务相互耦合。
 """
 
 import argparse
@@ -10,7 +11,7 @@ from collections.abc import Callable, Sequence
 
 from pydantic import ValidationError
 
-from finagent.core.chat import ChatSession
+from finagent.agents import AgentError, ToolCallingAgent
 from finagent.core.config import get_settings
 from finagent.llm import (
     BailianModelProvider,
@@ -21,10 +22,13 @@ from finagent.llm import (
     ModelRateLimitError,
     ModelTimeoutError,
 )
+from finagent.tools import ToolRegistry, create_default_tool_registry
 
 DEFAULT_SYSTEM_PROMPT = (
     "你是 FinAgent，一名谨慎、客观的 AI 投资研究助手。"
     "你需要区分事实、推测和观点，不承诺收益，也不替用户做最终投资决定。"
+    "涉及行情查询和数值计算时优先使用已提供工具，不要编造工具结果。"
+    "模拟行情必须明确告知用户不是实时数据，不能作为真实投资依据。"
 )
 EXIT_COMMANDS = {"exit", "quit", "退出"}
 
@@ -55,16 +59,24 @@ def format_provider_error(error: ModelProviderError) -> str:
 async def run_chat(
     provider: ModelProvider,
     *,
+    registry: ToolRegistry | None = None,
     input_func: Callable[[str], str] = input,
     output_func: Callable[[str], None] = print,
 ) -> None:
-    """运行多轮终端对话循环。
+    """运行支持工具调用的多轮终端对话循环。
 
-    输入和输出函数允许在测试中注入假终端，避免测试真的等待键盘输入。生产环境使用
-    默认的 ``input`` 和 ``print``，这是一种简单的依赖注入。
+    Args:
+        provider: 模型服务适配器。
+        registry: 可选工具注册中心；省略时启用项目内置的两个教学工具。
+        input_func: 终端输入函数，测试时可注入假输入。
+        output_func: 终端输出函数，测试时可注入列表的 ``append``。
+
+    CLI 只管理输入输出，模型与工具之间的多步编排由 ``ToolCallingAgent`` 负责。
     """
 
-    session = ChatSession(provider, DEFAULT_SYSTEM_PROMPT)
+    # 显式判断 None，使调用者未来即使传入“空注册中心”也能表达禁用全部工具的意图。
+    active_registry = registry if registry is not None else create_default_tool_registry()
+    agent = ToolCallingAgent(provider, active_registry, DEFAULT_SYSTEM_PROMPT)
     output_func("FinAgent 对话已启动。输入 exit、quit 或 退出 可结束会话。")
     try:
         while True:
@@ -83,15 +95,19 @@ async def run_chat(
                 continue
 
             try:
-                answer = await session.ask(user_input)
+                answer = await agent.ask(user_input)
             except ModelProviderError as error:
                 # 单轮失败不终止整个会话，用户修复网络或稍后即可继续重试。
                 output_func(format_provider_error(error))
                 continue
+            except AgentError as error:
+                # 达到工具循环上限等编排问题只影响本轮，正式历史不会被污染。
+                output_func(f"Agent 执行失败：{error}")
+                continue
             output_func(f"FinAgent：{answer}")
     finally:
         # 无论正常退出还是出现意外异常，都必须关闭底层 HTTP 客户端。
-        await session.close()
+        await agent.close()
 
 
 def main(argv: Sequence[str] | None = None) -> None:
