@@ -79,6 +79,13 @@ class ModelProvider(Protocol):
 class MarketDataProvider(Protocol):
     async def get_quote(self, symbol: str) -> Quote: ...
 
+class PortfolioCalculator:
+    def calculate(
+        self,
+        holdings: Sequence[Holding],
+        quotes: Sequence[Quote],
+    ) -> PortfolioSnapshot: ...
+
 class Retriever(Protocol):
     async def search(self, query: SearchQuery) -> list[Evidence]: ...
 
@@ -115,3 +122,24 @@ class MemoryStore(Protocol):
 - MCP 工具采用最小权限、参数白名单、超时和审计日志。
 - 个人持仓、Key、数据库文件和模型缓存加入 `.gitignore`。
 
+## 7. 已实现的投资组合领域层
+
+`src/finagent/portfolio/` 是独立的纯领域模块，不依赖 LLM、行情 SDK 或数据库：
+
+```text
+Holding + Quote
+      │ Pydantic 校验
+      ▼
+PortfolioCalculator
+      │ Decimal 确定性计算
+      ▼
+ValuedHolding + PortfolioSnapshot
+```
+
+- `models.py`：定义持仓、行情、单项估值和组合快照，并拒绝 float、负数与无时区行情。
+- `rounding.py`：集中规定金额和百分比使用 `ROUND_HALF_UP` 保留两位。
+- `calculator.py`：计算成本、市值、盈亏、收益率、权重、类别分布和 HHI。
+- `errors.py`：区分重复持仓、重复行情、行情缺失和币种不匹配。
+
+当前没有汇率换算，计算器要求全部持仓和行情使用同一基准币种。组合 `as_of` 取最旧
+行情时间，避免用一条较新的行情掩盖其他资产的数据陈旧问题。
