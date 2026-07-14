@@ -143,3 +143,32 @@ ValuedHolding + PortfolioSnapshot
 
 当前没有汇率换算，计算器要求全部持仓和行情使用同一基准币种。组合 `as_of` 取最旧
 行情时间，避免用一条较新的行情掩盖其他资产的数据陈旧问题。
+
+## 8. 已实现的市场数据抽象层
+
+`src/finagent/data/` 把通用应用规则与具体供应商调用分开：
+
+```text
+CLI / Agent / Portfolio 应用
+            │ 批量代码
+            ▼
+    MarketDataService
+      │ 超时、顺序、新鲜度
+      ▼
+   MarketDataProvider 协议
+      ├─ FakeMarketDataProvider（已实现）
+      ├─ 真实 HTTP Provider（下一阶段）
+      └─ 缓存 Provider（后续）
+            │
+            ▼
+          Quote
+```
+
+- `base.py`：定义最小异步 Provider 协议与资产代码规范化。
+- `fake.py`：从内存返回确定性行情，可模拟延迟、缺失和关闭状态。
+- `service.py`：统一管理单请求超时、批量顺序、重复代码和行情年龄。
+- `errors.py`：隔离缺失、超时、连接、限流、无效响应和陈旧行情异常。
+
+当前批量请求采用串行策略，优先保证免费数据源限流友好和错误顺序确定。若后续选定的
+真实供应商提供批量端点或允许并发，只需调整 Service/Provider 调度，不改变投资组合
+计算器。
