@@ -79,6 +79,13 @@ class ModelProvider(Protocol):
 class MarketDataProvider(Protocol):
     async def get_quote(self, symbol: str) -> Quote: ...
 
+class PortfolioCalculator:
+    def calculate(
+        self,
+        holdings: Sequence[Holding],
+        quotes: Sequence[Quote],
+    ) -> PortfolioSnapshot: ...
+
 class Retriever(Protocol):
     async def search(self, query: SearchQuery) -> list[Evidence]: ...
 
@@ -115,3 +122,53 @@ class MemoryStore(Protocol):
 - MCP 工具采用最小权限、参数白名单、超时和审计日志。
 - 个人持仓、Key、数据库文件和模型缓存加入 `.gitignore`。
 
+## 7. 已实现的投资组合领域层
+
+`src/finagent/portfolio/` 是独立的纯领域模块，不依赖 LLM、行情 SDK 或数据库：
+
+```text
+Holding + Quote
+      │ Pydantic 校验
+      ▼
+PortfolioCalculator
+      │ Decimal 确定性计算
+      ▼
+ValuedHolding + PortfolioSnapshot
+```
+
+- `models.py`：定义持仓、行情、单项估值和组合快照，并拒绝 float、负数与无时区行情。
+- `rounding.py`：集中规定金额和百分比使用 `ROUND_HALF_UP` 保留两位。
+- `calculator.py`：计算成本、市值、盈亏、收益率、权重、类别分布和 HHI。
+- `errors.py`：区分重复持仓、重复行情、行情缺失和币种不匹配。
+
+当前没有汇率换算，计算器要求全部持仓和行情使用同一基准币种。组合 `as_of` 取最旧
+行情时间，避免用一条较新的行情掩盖其他资产的数据陈旧问题。
+
+## 8. 已实现的市场数据抽象层
+
+`src/finagent/data/` 把通用应用规则与具体供应商调用分开：
+
+```text
+CLI / Agent / Portfolio 应用
+            │ 批量代码
+            ▼
+    MarketDataService
+      │ 超时、顺序、新鲜度
+      ▼
+   MarketDataProvider 协议
+      ├─ FakeMarketDataProvider（已实现）
+      ├─ 真实 HTTP Provider（下一阶段）
+      └─ 缓存 Provider（后续）
+            │
+            ▼
+          Quote
+```
+
+- `base.py`：定义最小异步 Provider 协议与资产代码规范化。
+- `fake.py`：从内存返回确定性行情，可模拟延迟、缺失和关闭状态。
+- `service.py`：统一管理单请求超时、批量顺序、重复代码和行情年龄。
+- `errors.py`：隔离缺失、超时、连接、限流、无效响应和陈旧行情异常。
+
+当前批量请求采用串行策略，优先保证免费数据源限流友好和错误顺序确定。若后续选定的
+真实供应商提供批量端点或允许并发，只需调整 Service/Provider 调度，不改变投资组合
+计算器。
