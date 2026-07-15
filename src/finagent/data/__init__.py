@@ -1,8 +1,10 @@
 """FinAgent 市场数据访问层的公共接口。"""
 
 from finagent.data.base import MarketDataProvider, normalize_symbol
+from finagent.data.cache import QuoteCache
 from finagent.data.errors import (
     DuplicateSymbolRequestError,
+    MarketDataAuthenticationError,
     MarketDataClosedError,
     MarketDataConnectionError,
     MarketDataError,
@@ -18,6 +20,7 @@ from finagent.data.service import MarketDataService
 __all__ = [
     "DuplicateSymbolRequestError",
     "FakeMarketDataProvider",
+    "MarketDataAuthenticationError",
     "MarketDataClosedError",
     "MarketDataConnectionError",
     "MarketDataError",
@@ -27,6 +30,7 @@ __all__ = [
     "MarketDataResponseError",
     "MarketDataService",
     "MarketDataTimeoutError",
+    "QuoteCache",
     "StaleQuoteError",
     "normalize_symbol",
 ]

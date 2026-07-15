@@ -33,3 +33,5 @@ models/
 # Frontend
 node_modules/
 
+# Codex和pytest生成的临时测试目录
+.codex_tmp/

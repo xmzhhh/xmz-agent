@@ -26,18 +26,25 @@ def test_settings_use_safe_development_defaults() -> None:
     assert settings.llm_enable_thinking is False
     assert settings.llm_temperature == 0.2
     assert settings.llm_max_output_tokens == 1200
+    assert settings.goldapi_api_key is None
+    assert str(settings.goldapi_base_url) == "https://www.goldapi.io/api"
+    assert settings.goldapi_timeout_seconds == 10
+    assert settings.goldapi_cache_ttl_seconds == 900
 
 
 def test_secret_key_is_masked_when_converted_to_text() -> None:
-    """SecretStr 不应在日志或调试输出中暴露真实密钥。"""
+    """两个 Provider 的 SecretStr 都不应在日志或调试输出中暴露明文。"""
 
     settings = Settings(
         llm_api_key=SecretStr("super-secret-key"),
+        goldapi_api_key=SecretStr("gold-super-secret-key"),
         _env_file=None,  # type: ignore[call-arg]
     )
 
     assert str(settings.llm_api_key) == "**********"
+    assert str(settings.goldapi_api_key) == "**********"
     assert "super-secret-key" not in repr(settings)
+    assert "gold-super-secret-key" not in repr(settings)
 
 
 def test_settings_read_values_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -48,6 +55,9 @@ def test_settings_read_values_from_environment(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setenv("LLM_ENABLE_THINKING", "true")
     monkeypatch.setenv("LLM_TEMPERATURE", "0.6")
     monkeypatch.setenv("LLM_MAX_OUTPUT_TOKENS", "2400")
+    monkeypatch.setenv("GOLDAPI_API_KEY", "gold-environment-key")
+    monkeypatch.setenv("GOLDAPI_TIMEOUT_SECONDS", "15")
+    monkeypatch.setenv("GOLDAPI_CACHE_TTL_SECONDS", "1800")
 
     settings = Settings(_env_file=None)  # type: ignore[call-arg]
 
@@ -56,6 +66,9 @@ def test_settings_read_values_from_environment(monkeypatch: pytest.MonkeyPatch) 
     assert settings.llm_enable_thinking is True
     assert settings.llm_temperature == 0.6
     assert settings.llm_max_output_tokens == 2400
+    assert settings.require_goldapi_api_key() == "gold-environment-key"
+    assert settings.goldapi_timeout_seconds == 15
+    assert settings.goldapi_cache_ttl_seconds == 1800
 
 
 def test_settings_reject_missing_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -77,6 +90,33 @@ def test_settings_reject_blank_api_key() -> None:
         )
 
 
+def test_settings_allow_missing_optional_goldapi_key() -> None:
+    """未使用黄金真实数据时，不应阻断普通CLI和其他离线功能启动。"""
+
+    settings = Settings(
+        llm_api_key=SecretStr("test-key"),
+        _env_file=None,  # type: ignore[call-arg]
+    )
+
+    assert settings.goldapi_api_key is None
+    with pytest.raises(ValueError, match="缺少 GOLDAPI_API_KEY"):
+        settings.require_goldapi_api_key()
+
+
+def test_settings_treat_blank_goldapi_key_as_missing() -> None:
+    """复制.env.example留下的空占位符应视为未启用，而不是阻断其他功能。"""
+
+    settings = Settings(
+        llm_api_key=SecretStr("test-key"),
+        goldapi_api_key=SecretStr("   "),
+        _env_file=None,  # type: ignore[call-arg]
+    )
+
+    assert settings.goldapi_api_key is None
+    with pytest.raises(ValueError, match="缺少 GOLDAPI_API_KEY"):
+        settings.require_goldapi_api_key()
+
+
 def test_settings_reject_invalid_temperature() -> None:
     """超出百炼接口范围的温度值必须被拦截，避免构造无效 API 请求。"""
 
@@ -93,7 +133,10 @@ def test_settings_can_load_a_dotenv_file(tmp_path: Path) -> None:
 
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "LLM_API_KEY=dotenv-key\nLLM_MODEL=qwen3.7-plus\nLLM_TIMEOUT_SECONDS=45\n",
+        "LLM_API_KEY=dotenv-key\n"
+        "LLM_MODEL=qwen3.7-plus\n"
+        "LLM_TIMEOUT_SECONDS=45\n"
+        "GOLDAPI_API_KEY=gold-dotenv-key\n",
         encoding="utf-8",
     )
 
@@ -102,3 +145,4 @@ def test_settings_can_load_a_dotenv_file(tmp_path: Path) -> None:
     assert settings.llm_api_key.get_secret_value() == "dotenv-key"
     assert settings.llm_model == "qwen3.7-plus"
     assert settings.llm_timeout_seconds == 45
+    assert settings.require_goldapi_api_key() == "gold-dotenv-key"
