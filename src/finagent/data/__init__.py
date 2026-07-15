@@ -16,12 +16,15 @@ from finagent.data.errors import (
     StaleQuoteError,
 )
 from finagent.data.fake import FakeMarketDataProvider
+from finagent.data.goldapi import GOLD_REFERENCE_SYMBOL, GoldApiMarketDataProvider
 from finagent.data.service import MarketDataService
 
 __all__ = [
     "AkShareFundNavProvider",
     "DuplicateSymbolRequestError",
     "FakeMarketDataProvider",
+    "GOLD_REFERENCE_SYMBOL",
+    "GoldApiMarketDataProvider",
     "MarketDataAuthenticationError",
     "MarketDataClosedError",
     "MarketDataConnectionError",
