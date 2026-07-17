@@ -9,6 +9,10 @@ class MarketDataError(RuntimeError):
     """所有市场数据异常的基类。"""
 
 
+class UnsupportedMarketDataSymbolError(MarketDataError):
+    """当前行情路由没有为指定资产代码配置可用 Provider。"""
+
+
 class MarketDataNotFoundError(MarketDataError):
     """数据源中不存在指定资产行情。"""
 

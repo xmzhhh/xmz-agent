@@ -14,9 +14,11 @@ from finagent.data.errors import (
     MarketDataResponseError,
     MarketDataTimeoutError,
     StaleQuoteError,
+    UnsupportedMarketDataSymbolError,
 )
 from finagent.data.fake import FakeMarketDataProvider
 from finagent.data.goldapi import GOLD_REFERENCE_SYMBOL, GoldApiMarketDataProvider
+from finagent.data.routing import RoutingMarketDataProvider
 from finagent.data.service import MarketDataService
 
 __all__ = [
@@ -36,6 +38,8 @@ __all__ = [
     "MarketDataService",
     "MarketDataTimeoutError",
     "QuoteCache",
+    "RoutingMarketDataProvider",
     "StaleQuoteError",
+    "UnsupportedMarketDataSymbolError",
     "normalize_symbol",
 ]
