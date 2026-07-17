@@ -156,14 +156,12 @@ CLI / Agent / Portfolio 应用
       │ 超时、顺序、新鲜度
       ▼
    MarketDataProvider 协议
-      ├─ FakeMarketDataProvider（已实现）
-      ├─ AkShareFundNavProvider（基金确认净值）
-      └─ GoldApiMarketDataProvider（国际黄金克价）
-            │
-       Provider 内部 QuoteCache
-            │
-            ▼
-          Quote
+      ├─ FakeMarketDataProvider → Quote
+      ├─ AkShareFundNavProvider → 自有 QuoteCache → Quote
+      ├─ GoldApiMarketDataProvider → 自有 QuoteCache → Quote
+      └─ RoutingMarketDataProvider（组合 Provider）
+            ├─ 显式基金白名单 → AkShareFundNavProvider
+            └─ XAU-CNY-GRAM → GoldApiMarketDataProvider
 ```
 
 - `base.py`：定义最小异步 Provider 协议与资产代码规范化。
@@ -173,10 +171,19 @@ CLI / Agent / Portfolio 应用
 - `cache.py`：使用单调时钟实现进程内 TTL 缓存，只保存已经校验的统一 `Quote`。
 - `akshare.py`：在线程中执行 AKShare 同步调用，把开放式基金 DataFrame 转换为每日确认净值。
 - `goldapi.py`：使用 httpx 异步请求 XAU/CNY，并把 24K 金价转换为人民币/克。
+- `routing.py`：按显式基金代码集合和黄金常量选择子 Provider，不解析响应、不增加第二层缓存，
+  也不把子 Provider 的超时或无数据错误改写成路由错误。
 - `diagnostics.py`：独立检查两个真实数据源；PyCharm 入口位于
-  `scripts/check_real_market_data.py`。
+  `scripts/step05_check_real_market_data.py`。
+- `scripts/step06_check_market_data_routing.py`：使用两个 Fake Provider 离线展示
+  `Service → Router → 子 Provider` 数据流和请求轨迹，不读取 API Key。
 
 当前批量请求采用串行策略，优先保证免费数据源限流友好和错误顺序确定。若后续选定的
 真实供应商提供批量端点或允许并发，只需调整 Service/Provider 调度，不改变投资组合
 计算器。AKShare 基金净值固定标记为延迟数据；GoldAPI 只表示国际黄金参考价，不能替代
 京东积存金实际卖出价。外部响应无效时明确失败，不使用假行情静默降级。
+
+Router 不能仅凭六位数字推断基金，因为基金和股票代码可能重叠。当前由应用在构造 Router
+时传入已确认的基金代码集合，并在内存中保存为不可变 ``frozenset``；进程重启时会重新构造。
+未来持仓持久化完成后，该集合应从基金持仓自动生成。缓存仍属于具体 Provider，因为基金
+净值和黄金价格需要不同 TTL，Router 只负责确定性转发和子 Provider 生命周期。

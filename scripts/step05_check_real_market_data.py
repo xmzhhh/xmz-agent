@@ -1,4 +1,4 @@
-"""在 PyCharm 中人工验收 AKShare 与 GoldAPI 的真实数据连接。
+"""Step 05：在 PyCharm 中人工验收 AKShare 与 GoldAPI 的真实数据连接。
 
 脚本默认查询东方人工智能主题混合C（017811）的最新确认单位净值，以及 GoldAPI 的
 ``XAU-CNY-GRAM`` 国际 24K 黄金人民币克价。它会产生真实网络请求，GoldAPI 调用会消耗
