@@ -1,8 +1,11 @@
 """FinAgent 市场数据访问层的公共接口。"""
 
+from finagent.data.akshare import AkShareFundNavProvider
 from finagent.data.base import MarketDataProvider, normalize_symbol
+from finagent.data.cache import QuoteCache
 from finagent.data.errors import (
     DuplicateSymbolRequestError,
+    MarketDataAuthenticationError,
     MarketDataClosedError,
     MarketDataConnectionError,
     MarketDataError,
@@ -13,11 +16,16 @@ from finagent.data.errors import (
     StaleQuoteError,
 )
 from finagent.data.fake import FakeMarketDataProvider
+from finagent.data.goldapi import GOLD_REFERENCE_SYMBOL, GoldApiMarketDataProvider
 from finagent.data.service import MarketDataService
 
 __all__ = [
+    "AkShareFundNavProvider",
     "DuplicateSymbolRequestError",
     "FakeMarketDataProvider",
+    "GOLD_REFERENCE_SYMBOL",
+    "GoldApiMarketDataProvider",
+    "MarketDataAuthenticationError",
     "MarketDataClosedError",
     "MarketDataConnectionError",
     "MarketDataError",
@@ -27,6 +35,7 @@ __all__ = [
     "MarketDataResponseError",
     "MarketDataService",
     "MarketDataTimeoutError",
+    "QuoteCache",
     "StaleQuoteError",
     "normalize_symbol",
 ]

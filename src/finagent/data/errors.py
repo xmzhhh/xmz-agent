@@ -21,6 +21,10 @@ class MarketDataConnectionError(MarketDataError):
     """网络、DNS、代理或 TLS 问题导致无法连接数据源。"""
 
 
+class MarketDataAuthenticationError(MarketDataError):
+    """API Key 缺失、无效或无权访问目标行情。"""
+
+
 class MarketDataRateLimitError(MarketDataError):
     """行情供应商拒绝了超过频率或额度的请求。"""
 

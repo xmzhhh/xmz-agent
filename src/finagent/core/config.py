@@ -24,7 +24,7 @@ ENV_FILE = PROJECT_ROOT / ".env"
 
 
 class Settings(BaseSettings):
-    """FinAgent 第一阶段所需的应用配置。
+    """FinAgent 各阶段共享的应用配置。
 
     配置优先从操作系统环境变量读取；开发环境还会读取项目根目录的 ``.env``。
     ``.env`` 只用于本机开发，部署时应由运行平台安全地注入环境变量。
@@ -39,6 +39,10 @@ class Settings(BaseSettings):
         llm_max_output_tokens: 单次响应允许生成的最大 token 数。
         llm_timeout_seconds: 单次 HTTP 请求的超时时间。
         llm_max_retries: 遇到暂时性错误时允许的最大重试次数。
+        goldapi_api_key: GoldAPI 密钥；未启用真实黄金 Provider 时允许不配置。
+        goldapi_base_url: GoldAPI REST API 的基础地址。
+        goldapi_timeout_seconds: GoldAPI HTTP 客户端的请求超时。
+        goldapi_cache_ttl_seconds: 国际黄金参考价的进程内缓存秒数。
     """
 
     model_config = SettingsConfigDict(
@@ -59,6 +63,10 @@ class Settings(BaseSettings):
     llm_max_output_tokens: int = Field(default=1200, ge=1, le=128_000)
     llm_timeout_seconds: float = Field(default=30.0, gt=0, le=300)
     llm_max_retries: int = Field(default=2, ge=0, le=10)
+    goldapi_api_key: SecretStr | None = None
+    goldapi_base_url: AnyHttpUrl = AnyHttpUrl("https://www.goldapi.io/api")
+    goldapi_timeout_seconds: float = Field(default=10.0, gt=0, le=120)
+    goldapi_cache_ttl_seconds: float = Field(default=900.0, gt=0, le=86_400)
 
     @field_validator("llm_api_key")
     @classmethod
@@ -81,6 +89,47 @@ class Settings(BaseSettings):
         if not value.get_secret_value().strip():
             raise ValueError("LLM_API_KEY 不能为空，请在本地 .env 中配置真实密钥")
         return value
+
+    @field_validator("goldapi_api_key")
+    @classmethod
+    def normalize_blank_goldapi_api_key(
+        cls,
+        value: SecretStr | None,
+    ) -> SecretStr | None:
+        """把模板中的空 GoldAPI 密钥转换为“尚未配置”。
+
+        GoldAPI 是可选数据源，因此普通 CLI 聊天和离线测试不应被迫配置它。真正创建
+        GoldAPI Provider 时会调用 :meth:`require_goldapi_api_key`，在那里检查缺失情况。
+        这样用户复制包含 ``GOLDAPI_API_KEY=`` 占位符的 ``.env.example`` 后，其他功能
+        仍然可以启动。
+
+        Args:
+            value: Pydantic 从环境变量转换出的可选密钥。
+
+        Returns:
+            未配置或内容为空时返回 ``None``；否则返回原始 ``SecretStr``。
+        """
+
+        if value is not None and not value.get_secret_value().strip():
+            return None
+        return value
+
+    def require_goldapi_api_key(self) -> str:
+        """为真实 GoldAPI Provider 返回必需的明文密钥。
+
+        配置模型平时使用 ``SecretStr`` 防止调试输出泄密；只有构造认证请求头的 Provider
+        边界需要短暂取得明文。调用方不得记录、拼接到异常或向用户回显该返回值。
+
+        Returns:
+            去除首尾空白后的 GoldAPI API Key。
+
+        Raises:
+            ValueError: 当前环境没有配置 ``GOLDAPI_API_KEY``。
+        """
+
+        if self.goldapi_api_key is None:
+            raise ValueError("缺少 GOLDAPI_API_KEY，请在项目根目录的本地 .env 中配置")
+        return self.goldapi_api_key.get_secret_value().strip()
 
 
 @lru_cache(maxsize=1)
