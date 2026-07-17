@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-import scripts.check_market_data_routing as routing_script
+import scripts.step06_check_market_data_routing as routing_script
 from finagent.data import (
     GOLD_REFERENCE_SYMBOL,
     FakeMarketDataProvider,

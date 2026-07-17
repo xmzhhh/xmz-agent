@@ -174,8 +174,8 @@ CLI / Agent / Portfolio 应用
 - `routing.py`：按显式基金代码集合和黄金常量选择子 Provider，不解析响应、不增加第二层缓存，
   也不把子 Provider 的超时或无数据错误改写成路由错误。
 - `diagnostics.py`：独立检查两个真实数据源；PyCharm 入口位于
-  `scripts/check_real_market_data.py`。
-- `scripts/check_market_data_routing.py`：使用两个 Fake Provider 离线展示
+  `scripts/step05_check_real_market_data.py`。
+- `scripts/step06_check_market_data_routing.py`：使用两个 Fake Provider 离线展示
   `Service → Router → 子 Provider` 数据流和请求轨迹，不读取 API Key。
 
 当前批量请求采用串行策略，优先保证免费数据源限流友好和错误顺序确定。若后续选定的

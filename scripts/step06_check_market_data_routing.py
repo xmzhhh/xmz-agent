@@ -1,4 +1,4 @@
-"""在 PyCharm 中离线验收真实行情多数据源路由。
+"""Step 06：在 PyCharm 中离线验收真实行情多数据源路由。
 
 本脚本使用两个 ``FakeMarketDataProvider``，不会访问 AKShare、GoldAPI 或读取任何 API Key。
 它验证一个 ``MarketDataService`` 能否通过 ``RoutingMarketDataProvider`` 按输入顺序取得基金
