@@ -23,6 +23,7 @@ from finagent.llm import (
     ModelTimeoutError,
 )
 from finagent.tools import ToolRegistry, create_default_tool_registry
+from finagent.web.server import run_dashboard_server
 
 DEFAULT_SYSTEM_PROMPT = (
     "你是 FinAgent，一名谨慎、客观的 AI 投资研究助手。"
@@ -31,6 +32,21 @@ DEFAULT_SYSTEM_PROMPT = (
     "模拟行情必须明确告知用户不是实时数据，不能作为真实投资依据。"
 )
 EXIT_COMMANDS = {"exit", "quit", "退出"}
+LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+type DashboardRunner = Callable[[str, int], None]
+
+
+def _valid_port(value: str) -> int:
+    """把命令行端口转换为 1～65535 的整数。"""
+
+    try:
+        port = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("端口必须是整数") from error
+    if not 1 <= port <= 65_535:
+        raise argparse.ArgumentTypeError("端口必须位于 1～65535")
+    return port
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -39,6 +55,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="finagent", description="FinAgent AI 投资研究助手")
     subparsers = parser.add_subparsers(dest="command")
     subparsers.add_parser("chat", help="启动与千问模型的多轮对话")
+    dashboard_parser = subparsers.add_parser("dashboard", help="启动本地资产面板 API")
+    dashboard_parser.add_argument("--host", default="127.0.0.1", help="监听地址")
+    dashboard_parser.add_argument("--port", type=_valid_port, default=8000, help="监听端口")
     return parser
 
 
@@ -110,12 +129,16 @@ async def run_chat(
         await agent.close()
 
 
-def main(argv: Sequence[str] | None = None) -> None:
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    dashboard_runner: DashboardRunner = run_dashboard_server,
+) -> None:
     """解析命令并启动对应功能；这是 pyproject.toml 注册的 CLI 入口。"""
 
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.command != "chat":
+    if args.command not in {"chat", "dashboard"}:
         parser.print_help()
         return
 
@@ -123,10 +146,25 @@ def main(argv: Sequence[str] | None = None) -> None:
         settings = get_settings()
     except ValidationError:
         # Pydantic 的完整错误适合开发调试，但 CLI 用户更需要明确的修复动作。
-        print("配置加载失败，请检查项目根目录 .env 中的 LLM_API_KEY 等配置。")
+        print("配置加载失败，请检查项目根目录 .env 中的环境变量。")
         return
 
-    asyncio.run(run_chat(BailianModelProvider(settings)))
+    if args.command == "dashboard":
+        if args.host not in LOCAL_HOSTS:
+            print(
+                "警告：资产面板没有登录认证，当前监听地址会向局域网开放读写接口。"
+                "请只在可信网络中使用。"
+            )
+        print(f"FinAgent 资产面板 API：http://{args.host}:{args.port}/api/v1/health")
+        dashboard_runner(args.host, args.port)
+        return
+
+    try:
+        provider = BailianModelProvider(settings)
+    except ValueError as error:
+        print(f"模型配置失败：{error}")
+        return
+    asyncio.run(run_chat(provider))
 
 
 if __name__ == "__main__":

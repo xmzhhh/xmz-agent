@@ -51,8 +51,11 @@ class BailianModelProvider:
     def __init__(self, settings: Settings, client: AsyncOpenAI | None = None) -> None:
         self._settings = settings
         self._owns_client = client is None
+        # Settings 允许离线 Dashboard 缺少模型密钥；模型 Provider 是真正需要密钥的边界，
+        # 即使测试注入客户端也必须保持同一配置契约。
+        api_key = settings.require_llm_api_key()
         self._client = client or AsyncOpenAI(
-            api_key=settings.llm_api_key.get_secret_value(),
+            api_key=api_key,
             base_url=str(settings.llm_base_url),
             timeout=settings.llm_timeout_seconds,
             max_retries=settings.llm_max_retries,

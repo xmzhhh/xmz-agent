@@ -13,12 +13,9 @@ from finagent.core.config import Settings
 
 
 def test_settings_use_safe_development_defaults() -> None:
-    """提供密钥后应使用适合第一阶段开发的默认模型参数。"""
+    """无任何密钥时也应使用适合离线资产面板的安全默认值。"""
 
-    settings = Settings(
-        llm_api_key=SecretStr("test-key"),
-        _env_file=None,  # type: ignore[call-arg]
-    )
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
 
     assert settings.llm_provider == "bailian"
     assert settings.llm_model == "qwen3.6-flash"
@@ -26,10 +23,13 @@ def test_settings_use_safe_development_defaults() -> None:
     assert settings.llm_enable_thinking is False
     assert settings.llm_temperature == 0.2
     assert settings.llm_max_output_tokens == 1200
+    assert settings.llm_api_key is None
     assert settings.goldapi_api_key is None
     assert str(settings.goldapi_base_url) == "https://www.goldapi.io/api"
     assert settings.goldapi_timeout_seconds == 10
     assert settings.goldapi_cache_ttl_seconds == 900
+    assert settings.market_data_mode == "fake"
+    assert settings.manual_gold_price_max_age_seconds == 900
 
 
 def test_secret_key_is_masked_when_converted_to_text() -> None:
@@ -61,7 +61,7 @@ def test_settings_read_values_from_environment(monkeypatch: pytest.MonkeyPatch) 
 
     settings = Settings(_env_file=None)  # type: ignore[call-arg]
 
-    assert settings.llm_api_key.get_secret_value() == "environment-key"
+    assert settings.require_llm_api_key() == "environment-key"
     assert settings.llm_model == "qwen3.7-plus"
     assert settings.llm_enable_thinking is True
     assert settings.llm_temperature == 0.6
@@ -71,23 +71,29 @@ def test_settings_read_values_from_environment(monkeypatch: pytest.MonkeyPatch) 
     assert settings.goldapi_cache_ttl_seconds == 1800
 
 
-def test_settings_reject_missing_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    """缺少 API Key 时应立即报错，而不是等到真正请求模型时才失败。"""
+def test_settings_allow_missing_llm_key_but_provider_boundary_requires_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """离线面板允许缺少模型 Key，真正创建模型 Provider 前仍必须失败。"""
 
     monkeypatch.delenv("LLM_API_KEY", raising=False)
 
-    with pytest.raises(ValidationError, match="llm_api_key"):
-        Settings(_env_file=None)  # type: ignore[call-arg]
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+
+    assert settings.llm_api_key is None
+    with pytest.raises(ValueError, match="缺少 LLM_API_KEY"):
+        settings.require_llm_api_key()
 
 
-def test_settings_reject_blank_api_key() -> None:
-    """只有空格的密钥没有意义，应被自定义校验器拒绝。"""
+def test_settings_treat_blank_llm_key_as_missing() -> None:
+    """复制模板留下的空白模型 Key 应允许面板启动，但聊天仍不能使用。"""
 
-    with pytest.raises(ValidationError, match="LLM_API_KEY 不能为空"):
-        Settings(
-            llm_api_key=SecretStr("   "),
-            _env_file=None,  # type: ignore[call-arg]
-        )
+    settings = Settings(
+        llm_api_key=SecretStr("   "),
+        _env_file=None,  # type: ignore[call-arg]
+    )
+
+    assert settings.llm_api_key is None
 
 
 def test_settings_allow_missing_optional_goldapi_key() -> None:
@@ -101,6 +107,30 @@ def test_settings_allow_missing_optional_goldapi_key() -> None:
     assert settings.goldapi_api_key is None
     with pytest.raises(ValueError, match="缺少 GOLDAPI_API_KEY"):
         settings.require_goldapi_api_key()
+
+
+def test_real_market_mode_requires_goldapi_key() -> None:
+    """Real 模式会装配 GoldAPI Provider，缺少 Key 时应在启动组合根前失败。"""
+
+    with pytest.raises(ValidationError, match="MARKET_DATA_MODE=real"):
+        Settings(
+            market_data_mode="real",
+            _env_file=None,  # type: ignore[call-arg]
+        )
+
+
+def test_real_market_mode_accepts_goldapi_key_without_llm_key() -> None:
+    """真实资产面板需要 GoldAPI Key，但仍不应该强迫用户配置模型 Key。"""
+
+    settings = Settings(
+        market_data_mode="real",
+        goldapi_api_key=SecretStr("gold-test-key"),
+        _env_file=None,  # type: ignore[call-arg]
+    )
+
+    assert settings.market_data_mode == "real"
+    assert settings.llm_api_key is None
+    assert settings.require_goldapi_api_key() == "gold-test-key"
 
 
 def test_settings_treat_blank_goldapi_key_as_missing() -> None:
@@ -142,7 +172,7 @@ def test_settings_can_load_a_dotenv_file(tmp_path: Path) -> None:
 
     settings = Settings(_env_file=env_file)  # type: ignore[call-arg]
 
-    assert settings.llm_api_key.get_secret_value() == "dotenv-key"
+    assert settings.require_llm_api_key() == "dotenv-key"
     assert settings.llm_model == "qwen3.7-plus"
     assert settings.llm_timeout_seconds == 45
     assert settings.require_goldapi_api_key() == "gold-dotenv-key"

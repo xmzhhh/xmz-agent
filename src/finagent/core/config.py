@@ -9,11 +9,12 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AnyHttpUrl, Field, SecretStr, field_validator
+from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Literal 会同时约束运行时配置和静态类型，避免把拼写错误悄悄传到 API 请求中。
 ProviderName = Literal["bailian"]
+MarketDataMode = Literal["fake", "real"]
 
 # 不能直接使用相对路径 ".env"：相对路径会以进程的当前工作目录为基准，而 PyCharm
 # 运行 scripts 下的文件时，工作目录可能不是项目根目录。根据当前源码文件反向定位
@@ -32,7 +33,7 @@ class Settings(BaseSettings):
     Attributes:
         llm_provider: 模型服务提供方。第一阶段只实现阿里云百炼。
         llm_model: 发起请求时使用的模型 ID。
-        llm_api_key: API 密钥，使用 SecretStr 避免在日志和 repr 中显示明文。
+        llm_api_key: 可选 API 密钥；只有创建模型 Provider 时才强制要求。
         llm_base_url: API 基础地址，为后续替换 Provider 保留配置边界。
         llm_enable_thinking: 是否启用千问的思考模式。
         llm_temperature: 控制生成随机性的采样温度。
@@ -43,6 +44,8 @@ class Settings(BaseSettings):
         goldapi_base_url: GoldAPI REST API 的基础地址。
         goldapi_timeout_seconds: GoldAPI HTTP 客户端的请求超时。
         goldapi_cache_ttl_seconds: 国际黄金参考价的进程内缓存秒数。
+        market_data_mode: 资产面板使用固定 Fake 行情还是真实行情 Provider。
+        manual_gold_price_max_age_seconds: 手工京东卖出价允许使用的最大秒数。
     """
 
     model_config = SettingsConfigDict(
@@ -56,7 +59,7 @@ class Settings(BaseSettings):
 
     llm_provider: ProviderName = "bailian"
     llm_model: str = Field(default="qwen3.6-flash", min_length=1)
-    llm_api_key: SecretStr
+    llm_api_key: SecretStr | None = None
     llm_base_url: AnyHttpUrl = AnyHttpUrl("https://dashscope.aliyuncs.com/compatible-mode/v1")
     llm_enable_thinking: bool = False
     llm_temperature: float = Field(default=0.2, ge=0, lt=2)
@@ -67,27 +70,26 @@ class Settings(BaseSettings):
     goldapi_base_url: AnyHttpUrl = AnyHttpUrl("https://www.goldapi.io/api")
     goldapi_timeout_seconds: float = Field(default=10.0, gt=0, le=120)
     goldapi_cache_ttl_seconds: float = Field(default=900.0, gt=0, le=86_400)
+    market_data_mode: MarketDataMode = "fake"
+    manual_gold_price_max_age_seconds: int = Field(default=900, gt=0, le=86_400)
 
     @field_validator("llm_api_key")
     @classmethod
-    def api_key_must_not_be_blank(cls, value: SecretStr) -> SecretStr:
-        """拒绝空白密钥，让配置问题在启动阶段暴露。
+    def normalize_blank_llm_api_key(cls, value: SecretStr | None) -> SecretStr | None:
+        """把空模型密钥转换为“尚未配置”。
 
-        这里只检查是否为空，不校验固定前缀。不同账户和兼容服务可能使用不同
-        格式，过度限制格式反而会降低配置层的可复用性。
+        离线资产面板不调用大模型，因此不能因为缺少模型密钥而启动失败。真正创建
+        ``BailianModelProvider`` 时会调用 :meth:`require_llm_api_key` 严格校验。
 
         Args:
-            value: Pydantic 已转换完成的密钥对象。
+            value: Pydantic 转换后的可选密钥。
 
         Returns:
-            通过非空校验的原始 SecretStr。
-
-        Raises:
-            ValueError: 密钥为空或只包含空白字符时抛出。
+            未配置或只有空白时返回 ``None``；否则返回原始 ``SecretStr``。
         """
 
-        if not value.get_secret_value().strip():
-            raise ValueError("LLM_API_KEY 不能为空，请在本地 .env 中配置真实密钥")
+        if value is not None and not value.get_secret_value().strip():
+            return None
         return value
 
     @field_validator("goldapi_api_key")
@@ -131,6 +133,28 @@ class Settings(BaseSettings):
             raise ValueError("缺少 GOLDAPI_API_KEY，请在项目根目录的本地 .env 中配置")
         return self.goldapi_api_key.get_secret_value().strip()
 
+    def require_llm_api_key(self) -> str:
+        """为模型 Provider 返回必需的明文密钥。
+
+        离线 Dashboard 只读取普通配置，不调用本方法；聊天命令和模型 Provider 必须调用，
+        因而仍会在发起网络请求前暴露缺失配置。
+
+        Raises:
+            ValueError: 当前环境没有配置 ``LLM_API_KEY``。
+        """
+
+        if self.llm_api_key is None:
+            raise ValueError("缺少 LLM_API_KEY，请在项目根目录的本地 .env 中配置")
+        return self.llm_api_key.get_secret_value().strip()
+
+    @model_validator(mode="after")
+    def real_market_data_requires_goldapi_key(self) -> "Settings":
+        """Real 模式必须在应用启动前确认 GoldAPI Key 已配置。"""
+
+        if self.market_data_mode == "real" and self.goldapi_api_key is None:
+            raise ValueError("MARKET_DATA_MODE=real 时必须配置 GOLDAPI_API_KEY")
+        return self
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
@@ -143,4 +167,4 @@ def get_settings() -> Settings:
         当前进程共享的 Settings 实例。
     """
 
-    return Settings()  # type: ignore[call-arg]
+    return Settings()

@@ -30,7 +30,8 @@
 - [x] 扩展预计卖出费和净收益计算。
 - [x] 实现资产目录和内存持仓仓库。
 - [x] 实现手工黄金卖价与 Dashboard Service。
-- [ ] 实现 FastAPI、CLI 入口和网页。
+- [x] 实现 FastAPI `/api/v1`、统一错误映射和 `finagent dashboard` CLI 入口。
+- [ ] 实现 Jinja2、原生 JavaScript 和 CSS 资产面板网页。
 - [ ] 完成自动测试、人工验收、README 和架构文档。
 
 ## 遇到的问题
@@ -111,6 +112,70 @@
 - **学到的知识**：Pydantic 的“运行时可转换输入”和 Python 的“静态构造参数类型”是两个层次。
   外部不可信字典使用 `model_validate()`，内部已经是精确类型的数据可以直接构造模型。
 
+### 问题 7：uv 全局缓存目录在当前进程中被拒绝访问
+
+- **问题现象**：执行 `uv lock --check` 时，uv 无法读取用户目录下的全局缓存
+  `C:\Users\xmz\AppData\Local\uv\cache`，并报告访问被拒绝。
+- **产生原因**：当前自动化进程对该全局缓存目录的权限与用户交互式终端不同；依赖声明和
+  `uv.lock` 本身没有冲突。
+- **排查思路**：先区分“依赖解析失败”和“缓存目录不可写”，再使用项目内的新缓存目录执行同一条
+  只读锁文件检查。如果新缓存能够完成解析，说明问题不在依赖版本。
+- **解决方法**：临时设置 `UV_CACHE_DIR` 为项目已忽略的 `.codex_tmp/uv-cache` 后重新执行
+  `uv lock --check`，72 个包解析成功。
+- **学到的知识**：包管理器报错不一定来自依赖；缓存、临时目录和文件锁同样会影响命令。排查时应
+  尽量只替换缓存位置，不删除全局缓存或改动依赖声明。
+
+### 问题 8：FastAPI TestClient 出现 Starlette 弃用警告
+
+- **问题现象**：最初的 35 项 API/配置/CLI 专项测试全部通过，但 Starlette 提示当前
+  `TestClient` 与 httpx 的兼容方式已弃用，建议迁移。
+- **产生原因**：测试使用 FastAPI 的同步 `TestClient`，它触发了当前 Starlette 版本中的兼容层；
+  这不影响断言结果，但会让未来依赖升级存在风险。
+- **排查思路**：确认警告来自测试客户端而非应用路由，再检查项目已经直接依赖 httpx，因此无需为了
+  测试再引入新的 HTTP 客户端依赖。
+- **解决方法**：测试改用 `httpx.AsyncClient` 和 `ASGITransport`，直接在内存中请求 FastAPI；同时
+  显式进入 `app.router.lifespan_context(app)`，保留启动/关闭生命周期验证。修改后 35 项专项测试
+  无警告通过。
+- **学到的知识**：HTTP 端点测试不必启动真实端口。ASGI Transport 可以测试完整 HTTP 序列化和
+  状态码；但它不会自动管理应用 lifespan，测试必须显式进入生命周期上下文。
+
+### 问题 9：pytest 复用旧临时目录时报告 WinError 5
+
+- **问题现象**：API 测试中 34 项通过、1 项在准备 `tmp_path` 时失败，错误是旧的
+  `.codex_tmp/phase6_web_tmp` 无法删除，同时 pytest 缓存目录也不可写。
+- **产生原因**：Windows 上旧临时目录仍带有当前进程无法处理的权限或占用状态；失败发生在 fixture
+  准备阶段，不是被测配置、API 或业务逻辑报错。
+- **排查思路**：根据栈追踪中的 `shutil.rmtree` 和 `tmp_path` 定位到测试基础设施，再观察同一轮 API
+  测试已经全部通过，排除业务回归。
+- **解决方法**：每轮测试在系统临时目录下使用带随机 GUID 的全新 `--basetemp`，并以
+  `-p no:cacheprovider` 禁用非必要 pytest 缓存；随后专项 35 项和全量 234 项全部通过。
+- **学到的知识**：测试失败要先看“失败发生在哪一层”。fixture 建立失败不能算业务测试失败；使用
+  唯一临时目录比强行删除权限不明的旧目录更安全。
+
+### 问题 10：mypy 发现过时抑制和分支具体类型冲突
+
+- **问题现象**：运行测试和 Ruff 均通过，但 mypy 报告 `Settings()` 上的 `type: ignore` 已不再需要，
+  并认为同一个 `provider` 变量不能先后接收 Fake 与 Routing 两种具体 Provider。
+- **产生原因**：`LLM_API_KEY` 改为可选后，旧的构造器抑制已经过时；另一个错误来自 mypy 根据 Fake
+  分支首次赋值，把变量推断成了 `FakeMarketDataProvider`，因此拒绝 Real 分支的路由 Provider。
+- **排查思路**：第一个错误按 `unused-ignore` 判断为应删除的历史补丁；第二个错误比较两个实现的共同
+  接口，确认它们都满足 `MarketDataProvider` 协议。
+- **解决方法**：删除无用 `type: ignore`，并在分支前把变量声明为
+  `provider: MarketDataProvider`。复验后 73 个 Python 文件通过 strict mypy。
+- **学到的知识**：类型忽略不是永久答案，行为变化后要及时删除；依赖倒置不仅是架构概念，也能通过
+  协议类型准确表达“上层只关心共同能力”。
+
+### 问题 11：网络中断后需要恢复本地开发现场
+
+- **问题现象**：第四小阶段开发过程中会话因网络中断停止，无法直接确定最后一条命令是否完成。
+- **产生原因**：外部网络或会话连接中断，原因与本地 FinAgent 业务代码无关。
+- **排查思路**：恢复后先检查当前分支、`git status`、改动文件列表和依赖锁文件，再读取关键新模块并
+  重跑专项测试，避免根据聊天记录猜测执行状态。
+- **解决方法**：确认仍位于 `feat/13-portfolio-dashboard`、未提交改动完整、`uv.lock` 可解析后，
+  从 API 测试迁移处继续开发；没有重复覆盖前三个已经提交的小阶段。
+- **学到的知识**：Git 工作区和测试结果是开发现场的事实来源。网络中断后应先做只读审计，再从最近
+  可验证节点继续，而不是重新执行全部修改。
+
 ## 第一小阶段：费率感知的投资组合估值
 
 ### 目标
@@ -187,6 +252,55 @@ Dashboard Service 生成快照时计算 `当前服务端时间 - recorded_at`：
 持仓并清理价格”和“载入两项演示持仓并写入演示价格”等跨仓库操作。生成面板时只在锁内复制
 内存快照，网络请求前立即释放锁，避免慢行情阻塞持仓 CRUD。
 
+## 第四小阶段：配置边界、应用装配、FastAPI 与 CLI
+
+### 为什么把 LLM_API_KEY 改为按需校验
+
+资产面板的持仓 CRUD、Fake 行情和确定性计算都不调用大模型。如果 `Settings` 在加载时就要求
+`LLM_API_KEY`，用户即使只想离线查看面板也无法启动。因此配置模型允许模型 Key 缺失，只有创建
+`BailianModelProvider` 时才调用 `require_llm_api_key()`。这不是降低聊天功能的安全要求：
+`finagent chat` 仍会在发起网络请求前明确失败，只是无关功能不再被模型配置耦合。
+
+`MARKET_DATA_MODE=real` 不同，因为本阶段 Real 面板固定会装配 GoldAPI 国际黄金参考 Provider；为了
+避免服务器启动后才发现认证缺失，Settings 会在 Real 模式下提前要求 `GOLDAPI_API_KEY`。
+
+### 组合根怎样屏蔽 Fake 与 Real 的实现差异
+
+`finagent.web.composition` 是本小阶段唯一知道全部具体实现的“组合根”：
+
+```text
+Fake 模式 → FakeMarketDataProvider ─┐
+                                    ├→ MarketDataService
+Real 模式 → RoutingMarketDataProvider┘
+                                    ↓
+内存持仓仓库 + 内存手工价仓库 → PortfolioDashboardService
+```
+
+Fake 模式使用固定基金净值和国际黄金参考价，允许载入匿名演示组合；Real 模式组合 AKShare 基金
+Provider 与 GoldAPI Provider，并禁用演示组合。两种实现都通过 `MarketDataProvider` 协议交给
+`MarketDataService`，所以 API 路由和 Dashboard Service 不需要判断数据源类型。
+
+### FastAPI 层负责什么、不负责什么
+
+`create_app()` 使用应用工厂创建独立内存状态，并注册 `/api/v1` 下的资产目录、持仓 CRUD、手工价格、
+面板快照、演示组合和健康检查端点。HTTP 层只做四件事：
+
+1. 用 Pydantic 把外部 JSON 校验为领域输入模型；
+2. 调用 `PortfolioDashboardService`；
+3. 用 response model 把 `Decimal` 金融数值稳定序列化为字符串；
+4. 把领域异常映射为 404、409、422、503 或 504，并保持统一 `error.code/message` 结构。
+
+金融公式、持仓规则、900 秒新鲜度和行情降级都没有复制到路由函数中。请求校验错误也不回显完整
+请求正文，防止未来扩展字段后意外把敏感输入记录或返回。应用 lifespan 退出时调用 `service.close()`，
+沿服务链关闭真实 HTTP Provider。
+
+### CLI 为什么默认只监听 127.0.0.1
+
+`finagent dashboard` 默认启动 `127.0.0.1:8000`，只有本机能访问。用户显式传入
+`--host 0.0.0.0` 等非本机地址时，CLI 会提示当前面板没有登录认证、会向局域网开放读写接口。
+这条提示不是身份认证的替代品；它只是在本阶段明确的可信局域网人工验收范围内降低误用风险。
+端口参数在进入 Uvicorn 前限制为 1～65535，错误输入由 argparse 直接拒绝。
+
 ## 测试与评测结果
 
 - 第一小阶段模型与计算器专项测试：33 项全部通过。
@@ -195,9 +309,12 @@ Dashboard Service 生成快照时计算 `当前服务端时间 - recorded_at`：
 - 第二小阶段完整 pytest：200 项全部通过，没有访问外部行情接口。
 - 第三小阶段手工价格和 Dashboard Service 专项测试：18 项全部通过。
 - 第三小阶段完整 pytest：218 项全部通过，没有访问真实行情接口。
+- 第四小阶段配置、百炼 Provider、CLI 和 FastAPI 专项测试：35 项全部通过，无弃用警告。
+- 第四小阶段完整 pytest：234 项全部通过，新增 16 项配置/CLI/API 行为测试。
 - Ruff lint：全项目全部通过。
-- Ruff format：全项目 68 个 Python 文件格式正确。
-- mypy strict：全项目 68 个 Python 文件没有类型问题。
+- Ruff format：全项目 73 个 Python 文件格式正确。
+- mypy strict：全项目 73 个 Python 文件没有类型问题。
+- `uv lock --check`：72 个依赖包解析一致；`uv build` 成功生成源码包和 wheel。
 - 所有测试均使用固定数据，没有访问 AKShare、GoldAPI 或消耗真实 API 额度。
 
 ## Git / GitHub 新知识
@@ -211,5 +328,6 @@ Dashboard Service 生成快照时计算 `当前服务端时间 - recorded_at`：
 
 ## 下一小阶段计划
 
-完成资产目录与异步 `InMemoryHoldingRepository`，让持仓只能从受支持资产中创建，并验证 CRUD、
-唯一代码、不可修改代码和演示组合原子载入规则。
+在现有 `/api/v1` 和 CLI 服务器入口上增加 Jinja2 页面与原生 JavaScript/CSS。页面只调用 API 并渲染
+结果，不复制任何金融公式；完成持仓 CRUD、京东手工卖价、演示组合、汇总卡片、持仓明细、风险集中度、
+行情来源/时间/延迟标记和国际黄金参考栏的人工可操作界面。
