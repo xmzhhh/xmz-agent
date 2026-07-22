@@ -97,6 +97,39 @@ class Holding(FinancialModel):
         return value.strip().upper() if isinstance(value, str) else value
 
 
+class HoldingCreate(FinancialModel):
+    """创建持仓时允许用户提交的字段。
+
+    名称、资产类型和币种不由用户填写，而是在仓库创建持仓时从受支持资产目录取得。
+    这样可以防止同一个代码被写成不同名称或错误资产类型，也为后续 FastAPI 请求模型
+    提供稳定边界。
+    """
+
+    symbol: str = Field(min_length=1, max_length=32, pattern=r"^[A-Z0-9._-]+$")
+    quantity: DecimalInput = Field(gt=0)
+    average_cost: DecimalInput = Field(gt=0)
+    estimated_exit_fee_percent: DecimalInput = Field(default=ZERO_PERCENT, ge=0, le=100)
+
+    @field_validator("symbol", mode="before")
+    @classmethod
+    def normalize_symbol(cls, value: Any) -> Any:
+        """统一用户输入的代码，确保它可以稳定匹配资产目录。"""
+
+        return value.strip().upper() if isinstance(value, str) else value
+
+
+class HoldingUpdate(FinancialModel):
+    """更新持仓时允许修改的完整数值字段。
+
+    模型故意不包含 ``symbol``。资产代码是仓库主键，若用户要更换资产，必须先删除旧持仓
+    再创建新持仓，不能把一条记录静默变成另一种资产。
+    """
+
+    quantity: DecimalInput = Field(gt=0)
+    average_cost: DecimalInput = Field(gt=0)
+    estimated_exit_fee_percent: DecimalInput = Field(default=ZERO_PERCENT, ge=0, le=100)
+
+
 class Quote(FinancialModel):
     """某项资产在明确时间和来源下的价格快照。"""
 

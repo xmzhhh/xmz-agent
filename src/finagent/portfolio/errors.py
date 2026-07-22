@@ -10,7 +10,7 @@ class PortfolioError(RuntimeError):
 
 
 class DuplicateHoldingError(PortfolioError):
-    """同一个资产代码在持仓列表中重复出现。"""
+    """同一个资产代码在持仓列表、仓库或批量输入中重复出现。"""
 
 
 class DuplicateQuoteError(PortfolioError):
@@ -23,3 +23,19 @@ class QuoteNotFoundError(PortfolioError):
 
 class CurrencyMismatchError(PortfolioError):
     """持仓、行情或投资组合基准币种不一致。"""
+
+
+class UnsupportedAssetError(PortfolioError):
+    """资产代码没有出现在当前产品支持目录中。"""
+
+
+class AssetNotHoldableError(PortfolioError):
+    """资产只用于展示参考信息，不允许创建为用户持仓。"""
+
+
+class HoldingNotFoundError(PortfolioError):
+    """内存仓库中不存在指定资产代码的持仓。"""
+
+
+class DemoPortfolioConflictError(PortfolioError):
+    """仓库已有持仓，不能覆盖或合并载入匿名演示组合。"""
