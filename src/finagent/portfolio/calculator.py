@@ -46,6 +46,10 @@ class _PositionDraft:
     market_value: Decimal
     unrealized_pnl: Decimal
     return_percent: Decimal
+    estimated_exit_fee: Decimal
+    net_liquidation_value: Decimal
+    net_unrealized_pnl: Decimal
+    net_return_percent: Decimal
 
 
 class PortfolioCalculator:
@@ -88,6 +92,17 @@ class PortfolioCalculator:
         total_return_percent = round_percent(
             total_unrealized_pnl / total_cost * ONE_HUNDRED_PERCENT
         )
+        # 汇总直接累加已经舍入到“分”的单项结果，确保网页明细相加与汇总卡片完全一致。
+        total_estimated_exit_fee = sum(
+            (draft.estimated_exit_fee for draft in drafts), start=ZERO_MONEY
+        )
+        total_net_liquidation_value = sum(
+            (draft.net_liquidation_value for draft in drafts), start=ZERO_MONEY
+        )
+        total_net_unrealized_pnl = total_net_liquidation_value - total_cost
+        total_net_return_percent = round_percent(
+            total_net_unrealized_pnl / total_cost * ONE_HUNDRED_PERCENT
+        )
 
         weights = self._calculate_display_weights(drafts, total_market_value)
         positions = tuple(
@@ -106,6 +121,10 @@ class PortfolioCalculator:
             total_market_value=total_market_value,
             total_unrealized_pnl=total_unrealized_pnl,
             total_return_percent=total_return_percent,
+            total_estimated_exit_fee=total_estimated_exit_fee,
+            total_net_liquidation_value=total_net_liquidation_value,
+            total_net_unrealized_pnl=total_net_unrealized_pnl,
+            total_net_return_percent=total_net_return_percent,
             asset_type_weights=asset_type_weights,
             max_position_symbol=drafts[max_index].holding.symbol,
             max_position_weight_percent=weights[max_index],
@@ -143,6 +162,15 @@ class PortfolioCalculator:
         market_value = round_money(holding.quantity * quote.price)
         unrealized_pnl = market_value - cost_basis
         return_percent = round_percent(unrealized_pnl / cost_basis * ONE_HUNDRED_PERCENT)
+
+        # 持仓费率使用百分数语义，所以必须除以 100。费用也先量化到分，避免组合汇总与
+        # 页面逐项展示产生一分钱差异。费率最多为 100%，因此净到账金额不会小于零。
+        estimated_exit_fee = round_money(
+            market_value * holding.estimated_exit_fee_percent / ONE_HUNDRED_PERCENT
+        )
+        net_liquidation_value = market_value - estimated_exit_fee
+        net_unrealized_pnl = net_liquidation_value - cost_basis
+        net_return_percent = round_percent(net_unrealized_pnl / cost_basis * ONE_HUNDRED_PERCENT)
         return _PositionDraft(
             holding=holding,
             quote=quote,
@@ -150,6 +178,10 @@ class PortfolioCalculator:
             market_value=market_value,
             unrealized_pnl=unrealized_pnl,
             return_percent=return_percent,
+            estimated_exit_fee=estimated_exit_fee,
+            net_liquidation_value=net_liquidation_value,
+            net_unrealized_pnl=net_unrealized_pnl,
+            net_return_percent=net_return_percent,
         )
 
     @staticmethod
@@ -191,6 +223,11 @@ class PortfolioCalculator:
             market_value=draft.market_value,
             unrealized_pnl=draft.unrealized_pnl,
             return_percent=draft.return_percent,
+            estimated_exit_fee_percent=draft.holding.estimated_exit_fee_percent,
+            estimated_exit_fee=draft.estimated_exit_fee,
+            net_liquidation_value=draft.net_liquidation_value,
+            net_unrealized_pnl=draft.net_unrealized_pnl,
+            net_return_percent=draft.net_return_percent,
             weight_percent=weight_percent,
             quote_as_of=draft.quote.as_of,
             quote_source=draft.quote.source,
@@ -240,6 +277,10 @@ class PortfolioCalculator:
             total_market_value=ZERO_MONEY,
             total_unrealized_pnl=ZERO_MONEY,
             total_return_percent=None,
+            total_estimated_exit_fee=ZERO_MONEY,
+            total_net_liquidation_value=ZERO_MONEY,
+            total_net_unrealized_pnl=ZERO_MONEY,
+            total_net_return_percent=None,
             asset_type_weights={},
             max_position_symbol=None,
             max_position_weight_percent=ZERO_PERCENT,

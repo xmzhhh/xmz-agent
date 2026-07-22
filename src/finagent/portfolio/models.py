@@ -77,6 +77,7 @@ class Holding(FinancialModel):
         asset_type: 股票、基金、黄金等资产类别。
         quantity: 持有数量，必须大于零。
         average_cost: 每单位平均成本，必须大于零。
+        estimated_exit_fee_percent: 预计卖出费率，使用百分数语义；例如 0.5 表示 0.5%。
         currency: 成本使用的币种。
     """
 
@@ -85,6 +86,7 @@ class Holding(FinancialModel):
     asset_type: AssetType
     quantity: DecimalInput = Field(gt=0)
     average_cost: DecimalInput = Field(gt=0)
+    estimated_exit_fee_percent: DecimalInput = Field(default=ZERO_PERCENT, ge=0, le=100)
     currency: Currency
 
     @field_validator("symbol", mode="before")
@@ -123,7 +125,12 @@ class Quote(FinancialModel):
 
 
 class ValuedHolding(FinancialModel):
-    """持仓与行情匹配后得到的单项资产估值结果。"""
+    """持仓与行情匹配后得到的单项资产估值结果。
+
+    ``market_value``、``unrealized_pnl`` 和 ``return_percent`` 是未扣卖出费的毛口径；
+    ``net_*`` 字段是假设按当前价格立即卖出并扣除预计费用后的净口径。两组字段同时保留，
+    页面才能清楚解释“账面价值”和“预计真正到账金额”的区别。
+    """
 
     symbol: str
     name: str
@@ -136,6 +143,11 @@ class ValuedHolding(FinancialModel):
     market_value: DecimalInput
     unrealized_pnl: DecimalInput
     return_percent: DecimalInput
+    estimated_exit_fee_percent: DecimalInput = Field(ge=0, le=100)
+    estimated_exit_fee: DecimalInput = Field(ge=0)
+    net_liquidation_value: DecimalInput = Field(ge=0)
+    net_unrealized_pnl: DecimalInput
+    net_return_percent: DecimalInput
     weight_percent: DecimalInput = Field(ge=0, le=100)
     quote_as_of: datetime
     quote_source: str
@@ -155,6 +167,10 @@ class PortfolioSnapshot(FinancialModel):
     total_market_value: DecimalInput = Field(ge=0)
     total_unrealized_pnl: DecimalInput
     total_return_percent: DecimalInput | None
+    total_estimated_exit_fee: DecimalInput = Field(ge=0)
+    total_net_liquidation_value: DecimalInput = Field(ge=0)
+    total_net_unrealized_pnl: DecimalInput
+    total_net_return_percent: DecimalInput | None
     asset_type_weights: dict[AssetType, DecimalInput]
     max_position_symbol: str | None
     max_position_weight_percent: DecimalInput = Field(ge=0, le=100)
@@ -172,6 +188,10 @@ class PortfolioSnapshot(FinancialModel):
                 or self.total_market_value != ZERO_MONEY
                 or self.total_unrealized_pnl != ZERO_MONEY
                 or self.total_return_percent is not None
+                or self.total_estimated_exit_fee != ZERO_MONEY
+                or self.total_net_liquidation_value != ZERO_MONEY
+                or self.total_net_unrealized_pnl != ZERO_MONEY
+                or self.total_net_return_percent is not None
                 or self.asset_type_weights
                 or self.max_position_symbol is not None
                 or self.max_position_weight_percent != ZERO_PERCENT
