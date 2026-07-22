@@ -94,6 +94,35 @@ async def test_health_and_assets_do_not_require_llm_key() -> None:
     ]
 
 
+async def test_dashboard_page_and_static_assets_are_served() -> None:
+    """网页外壳、CSS 和 JavaScript 应由安装包内的同一个 FastAPI 应用提供。"""
+
+    async with open_test_client() as (client, _):
+        page = await client.get("/")
+        stylesheet = await client.get("/static/dashboard.css")
+        script = await client.get("/static/dashboard.js")
+
+    assert page.status_code == 200
+    assert page.headers["content-type"].startswith("text/html")
+    assert "<title>FinAgent 资产面板</title>" in page.text
+    assert 'data-market-mode="fake"' in page.text
+    assert 'id="holding-form"' in page.text
+    assert 'id="positions-body"' in page.text
+    assert "/static/dashboard.css" in page.text
+    assert "/static/dashboard.js" in page.text
+
+    assert stylesheet.status_code == 200
+    assert stylesheet.headers["content-type"].startswith("text/css")
+    assert "--accent:" in stylesheet.text
+
+    assert script.status_code == 200
+    assert "javascript" in script.headers["content-type"]
+    assert 'const API_BASE = "/api/v1"' in script.text
+    assert 'apiRequest("/dashboard")' in script.text
+    # 外部行情来源通过 textContent 写入，防止把 Provider 文本作为 HTML 执行。
+    assert ".innerHTML" not in script.text
+
+
 async def test_holding_crud_uses_decimal_strings_and_consistent_not_found_error() -> None:
     """持仓 CRUD 应保持 Decimal 字符串，并把不存在映射为统一 404 结构。"""
 

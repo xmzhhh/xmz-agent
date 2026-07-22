@@ -6,10 +6,13 @@
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import APIRouter, FastAPI, Request, status
+from fastapi import APIRouter, FastAPI, Request, Response, status
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 
 from finagent.core.config import Settings, get_settings
 from finagent.dashboard import (
@@ -36,6 +39,9 @@ from finagent.portfolio import (
     UnsupportedAssetError,
 )
 from finagent.web.composition import build_dashboard_service
+
+WEB_DIRECTORY = Path(__file__).resolve().parent
+TEMPLATES = Jinja2Templates(directory=WEB_DIRECTORY / "templates")
 
 
 def _error_response(status_code: int, code: str, message: str) -> JSONResponse:
@@ -95,6 +101,23 @@ def create_app(
         lifespan=lifespan,
     )
     app.state.dashboard_service = service
+
+    # 静态目录和模板都位于 Python 包内部，安装 wheel 后仍能由同一应用入口提供。
+    app.mount(
+        "/static",
+        StaticFiles(directory=WEB_DIRECTORY / "static"),
+        name="static",
+    )
+
+    @app.get("/", response_class=HTMLResponse, include_in_schema=False)
+    async def dashboard_page(request: Request) -> Response:
+        """返回资产面板外壳；所有实时数据由浏览器继续请求 `/api/v1`。"""
+
+        return TEMPLATES.TemplateResponse(
+            request=request,
+            name="dashboard.html",
+            context={"market_data_mode": active_settings.market_data_mode},
+        )
 
     @app.exception_handler(RequestValidationError)
     async def handle_request_validation(
