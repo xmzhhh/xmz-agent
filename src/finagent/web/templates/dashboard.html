@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="FinAgent 模拟持仓管理与资产估值面板">
+    <title>FinAgent 资产面板</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='/dashboard.css') }}">
+</head>
+<body data-market-mode="{{ market_data_mode }}">
+<div class="app-shell">
+    <header class="topbar">
+        <div class="brand-block">
+            <div class="brand-mark" aria-hidden="true">F</div>
+            <div>
+                <p class="eyebrow">FinAgent · Portfolio Lab</p>
+                <h1>模拟资产面板</h1>
+            </div>
+        </div>
+        <div class="topbar-actions">
+            <span id="connection-status" class="status-badge status-loading" aria-live="polite">
+                正在连接
+            </span>
+            <button id="refresh-button" class="button button-secondary" type="button">刷新数据</button>
+            <button id="demo-button" class="button button-primary" type="button">载入演示组合</button>
+        </div>
+    </header>
+
+    <aside class="safety-notice" aria-label="使用范围提示">
+        <strong>教学与模拟用途</strong>
+        <span>当前页面不连接券商、不执行交易。持仓和手工价格只保存在本次进程内，服务重启后清空。</span>
+    </aside>
+
+    <div id="page-message" class="message" role="status" aria-live="polite" hidden></div>
+
+    <main>
+        <section class="section-block" aria-labelledby="overview-title">
+            <div class="section-heading">
+                <div>
+                    <p class="section-kicker">Portfolio overview</p>
+                    <h2 id="overview-title">组合概览</h2>
+                </div>
+                <p id="snapshot-time" class="section-meta">等待组合快照</p>
+            </div>
+
+            <div class="summary-grid">
+                <article class="summary-card summary-card-strong">
+                    <span>毛市值</span>
+                    <strong id="total-market-value">—</strong>
+                    <small>按当前估值价格计算</small>
+                </article>
+                <article class="summary-card">
+                    <span>预计到账金额</span>
+                    <strong id="total-net-value">—</strong>
+                    <small>已扣预计卖出费</small>
+                </article>
+                <article class="summary-card">
+                    <span>净盈亏</span>
+                    <strong id="total-net-pnl">—</strong>
+                    <small id="total-net-return">收益率 —</small>
+                </article>
+                <article class="summary-card">
+                    <span>预计卖出费</span>
+                    <strong id="total-exit-fee">—</strong>
+                    <small id="total-cost">持仓成本 —</small>
+                </article>
+            </div>
+        </section>
+
+        <section class="workspace-grid" aria-label="持仓录入与参考信息">
+            <article class="panel form-panel">
+                <div class="panel-heading">
+                    <div>
+                        <p class="section-kicker">Position editor</p>
+                        <h2 id="holding-form-title">新增持仓</h2>
+                    </div>
+                    <button id="cancel-edit-button" class="text-button" type="button" hidden>取消编辑</button>
+                </div>
+
+                <form id="holding-form">
+                    <label for="holding-symbol">资产</label>
+                    <select id="holding-symbol" name="symbol" required>
+                        <option value="">正在载入资产目录…</option>
+                    </select>
+
+                    <div class="form-row">
+                        <div>
+                            <label for="holding-quantity">持有数量</label>
+                            <input id="holding-quantity" name="quantity" type="text" inputmode="decimal"
+                                   placeholder="例如：100" required>
+                        </div>
+                        <div>
+                            <label for="holding-average-cost">持仓均价</label>
+                            <input id="holding-average-cost" name="average_cost" type="text"
+                                   inputmode="decimal" placeholder="例如：3.7994" required>
+                        </div>
+                    </div>
+
+                    <label for="holding-fee-rate">预计卖出费率（%）</label>
+                    <input id="holding-fee-rate" name="estimated_exit_fee_percent" type="text"
+                           inputmode="decimal" value="0" required>
+                    <p class="field-help">输入 0.5 表示 0.5%，不是 50%。</p>
+
+                    <button id="holding-submit-button" class="button button-primary button-wide" type="submit">
+                        新增持仓
+                    </button>
+                </form>
+            </article>
+
+            <article class="panel form-panel">
+                <div class="panel-heading">
+                    <div>
+                        <p class="section-kicker">Manual quote</p>
+                        <h2>京东积存金卖出价</h2>
+                    </div>
+                    <span class="asset-code">JD-ZS-GOLD</span>
+                </div>
+
+                <form id="manual-price-form">
+                    <label for="manual-gold-price">当前可成交卖出价（人民币/克）</label>
+                    <input id="manual-gold-price" name="price" type="text" inputmode="decimal"
+                           placeholder="例如：878.36" required>
+                    <p class="field-help">由服务端记录录入时间，默认 15 分钟后失效。</p>
+                    <div class="button-row">
+                        <button class="button button-primary" type="submit">保存卖出价</button>
+                        <button id="delete-price-button" class="button button-danger" type="button">
+                            清除价格
+                        </button>
+                    </div>
+                </form>
+
+                <dl class="record-summary">
+                    <div>
+                        <dt>当前记录</dt>
+                        <dd id="manual-price-value">尚未录入</dd>
+                    </div>
+                    <div>
+                        <dt>录入时间</dt>
+                        <dd id="manual-price-time">—</dd>
+                    </div>
+                </dl>
+            </article>
+
+            <article class="panel reference-panel">
+                <div class="panel-heading">
+                    <div>
+                        <p class="section-kicker">Gold reference</p>
+                        <h2>国际黄金参考</h2>
+                    </div>
+                    <span id="gold-reference-status" class="status-badge">未请求</span>
+                </div>
+                <strong id="gold-reference-price" class="reference-price">—</strong>
+                <p id="gold-reference-source" class="reference-source">
+                    存在京东黄金持仓时才会查询，仅供比较，不参与持仓估值。
+                </p>
+                <dl class="record-summary">
+                    <div>
+                        <dt>行情时间</dt>
+                        <dd id="gold-reference-time">—</dd>
+                    </div>
+                    <div>
+                        <dt>延迟标记</dt>
+                        <dd id="gold-reference-delay">—</dd>
+                    </div>
+                </dl>
+            </article>
+        </section>
+
+        <section class="section-block" aria-labelledby="positions-title">
+            <div class="section-heading">
+                <div>
+                    <p class="section-kicker">Position details</p>
+                    <h2 id="positions-title">持仓明细</h2>
+                </div>
+                <span id="position-count" class="section-meta">0 项持仓</span>
+            </div>
+
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                    <tr>
+                        <th scope="col">资产</th>
+                        <th scope="col">数量 / 成本</th>
+                        <th scope="col">当前价 / 市值</th>
+                        <th scope="col">毛收益</th>
+                        <th scope="col">预计费用 / 到账</th>
+                        <th scope="col">净收益</th>
+                        <th scope="col">仓位</th>
+                        <th scope="col">行情</th>
+                        <th scope="col">操作</th>
+                    </tr>
+                    </thead>
+                    <tbody id="positions-body">
+                    <tr class="empty-row">
+                        <td colspan="9">当前没有持仓，可以手工新增或载入匿名演示组合。</td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="analysis-grid" aria-label="风险集中度与数据说明">
+            <article class="panel">
+                <div class="panel-heading">
+                    <div>
+                        <p class="section-kicker">Concentration</p>
+                        <h2>仓位集中度</h2>
+                    </div>
+                </div>
+                <div class="risk-metrics">
+                    <div>
+                        <span>最大仓位</span>
+                        <strong id="max-position">—</strong>
+                    </div>
+                    <div>
+                        <span>HHI</span>
+                        <strong id="concentration-hhi">—</strong>
+                    </div>
+                </div>
+                <div id="asset-type-weights" class="weight-list">
+                    <p class="empty-copy">暂无资产类别权重。</p>
+                </div>
+            </article>
+
+            <article class="panel">
+                <div class="panel-heading">
+                    <div>
+                        <p class="section-kicker">Data quality</p>
+                        <h2>行情质量</h2>
+                    </div>
+                </div>
+                <dl class="quality-list">
+                    <div>
+                        <dt>数据模式</dt>
+                        <dd id="market-mode">{{ market_data_mode }}</dd>
+                    </div>
+                    <div>
+                        <dt>组合基准币种</dt>
+                        <dd id="base-currency">—</dd>
+                    </div>
+                    <div>
+                        <dt>组合数据时间</dt>
+                        <dd id="portfolio-as-of">—</dd>
+                    </div>
+                    <div>
+                        <dt>包含延迟行情</dt>
+                        <dd id="delayed-data">—</dd>
+                    </div>
+                </dl>
+            </article>
+        </section>
+    </main>
+
+    <footer>
+        FinAgent v0.2.2 规划版本 · 页面展示 API 结果，不构成投资建议
+    </footer>
+</div>
+
+<script src="{{ url_for('static', path='/dashboard.js') }}" defer></script>
+</body>
+</html>

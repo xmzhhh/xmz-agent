@@ -50,6 +50,7 @@ def test_holding_normalizes_symbol_and_parses_exact_decimal() -> None:
     assert holding.symbol == "FUND.ABC"
     assert holding.quantity == Decimal("1000")
     assert holding.average_cost == Decimal("4.80")
+    assert holding.estimated_exit_fee_percent == Decimal("0.00")
     assert holding.asset_type is AssetType.GOLD
 
 
@@ -70,6 +71,17 @@ def test_holding_rejects_boolean_as_quantity() -> None:
     data["quantity"] = True
 
     with pytest.raises(ValidationError, match="不能使用 bool 或 float"):
+        Holding.model_validate(data)
+
+
+@pytest.mark.parametrize("fee_percent", ["-0.01", "100.01", 0.5])
+def test_holding_rejects_invalid_exit_fee_percent(fee_percent: object) -> None:
+    """费率必须是 0～100 的精确百分数，防止负费用、超额费用或 float 误差进入计算。"""
+
+    data = valid_holding_data()
+    data["estimated_exit_fee_percent"] = fee_percent
+
+    with pytest.raises(ValidationError):
         Holding.model_validate(data)
 
 

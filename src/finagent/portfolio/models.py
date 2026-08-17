@@ -77,6 +77,7 @@ class Holding(FinancialModel):
         asset_type: 股票、基金、黄金等资产类别。
         quantity: 持有数量，必须大于零。
         average_cost: 每单位平均成本，必须大于零。
+        estimated_exit_fee_percent: 预计卖出费率，使用百分数语义；例如 0.5 表示 0.5%。
         currency: 成本使用的币种。
     """
 
@@ -85,6 +86,7 @@ class Holding(FinancialModel):
     asset_type: AssetType
     quantity: DecimalInput = Field(gt=0)
     average_cost: DecimalInput = Field(gt=0)
+    estimated_exit_fee_percent: DecimalInput = Field(default=ZERO_PERCENT, ge=0, le=100)
     currency: Currency
 
     @field_validator("symbol", mode="before")
@@ -93,6 +95,39 @@ class Holding(FinancialModel):
         """统一资产代码大小写，保证持仓可以稳定匹配行情。"""
 
         return value.strip().upper() if isinstance(value, str) else value
+
+
+class HoldingCreate(FinancialModel):
+    """创建持仓时允许用户提交的字段。
+
+    名称、资产类型和币种不由用户填写，而是在仓库创建持仓时从受支持资产目录取得。
+    这样可以防止同一个代码被写成不同名称或错误资产类型，也为后续 FastAPI 请求模型
+    提供稳定边界。
+    """
+
+    symbol: str = Field(min_length=1, max_length=32, pattern=r"^[A-Z0-9._-]+$")
+    quantity: DecimalInput = Field(gt=0)
+    average_cost: DecimalInput = Field(gt=0)
+    estimated_exit_fee_percent: DecimalInput = Field(default=ZERO_PERCENT, ge=0, le=100)
+
+    @field_validator("symbol", mode="before")
+    @classmethod
+    def normalize_symbol(cls, value: Any) -> Any:
+        """统一用户输入的代码，确保它可以稳定匹配资产目录。"""
+
+        return value.strip().upper() if isinstance(value, str) else value
+
+
+class HoldingUpdate(FinancialModel):
+    """更新持仓时允许修改的完整数值字段。
+
+    模型故意不包含 ``symbol``。资产代码是仓库主键，若用户要更换资产，必须先删除旧持仓
+    再创建新持仓，不能把一条记录静默变成另一种资产。
+    """
+
+    quantity: DecimalInput = Field(gt=0)
+    average_cost: DecimalInput = Field(gt=0)
+    estimated_exit_fee_percent: DecimalInput = Field(default=ZERO_PERCENT, ge=0, le=100)
 
 
 class Quote(FinancialModel):
@@ -123,7 +158,12 @@ class Quote(FinancialModel):
 
 
 class ValuedHolding(FinancialModel):
-    """持仓与行情匹配后得到的单项资产估值结果。"""
+    """持仓与行情匹配后得到的单项资产估值结果。
+
+    ``market_value``、``unrealized_pnl`` 和 ``return_percent`` 是未扣卖出费的毛口径；
+    ``net_*`` 字段是假设按当前价格立即卖出并扣除预计费用后的净口径。两组字段同时保留，
+    页面才能清楚解释“账面价值”和“预计真正到账金额”的区别。
+    """
 
     symbol: str
     name: str
@@ -136,6 +176,11 @@ class ValuedHolding(FinancialModel):
     market_value: DecimalInput
     unrealized_pnl: DecimalInput
     return_percent: DecimalInput
+    estimated_exit_fee_percent: DecimalInput = Field(ge=0, le=100)
+    estimated_exit_fee: DecimalInput = Field(ge=0)
+    net_liquidation_value: DecimalInput = Field(ge=0)
+    net_unrealized_pnl: DecimalInput
+    net_return_percent: DecimalInput
     weight_percent: DecimalInput = Field(ge=0, le=100)
     quote_as_of: datetime
     quote_source: str
@@ -155,6 +200,10 @@ class PortfolioSnapshot(FinancialModel):
     total_market_value: DecimalInput = Field(ge=0)
     total_unrealized_pnl: DecimalInput
     total_return_percent: DecimalInput | None
+    total_estimated_exit_fee: DecimalInput = Field(ge=0)
+    total_net_liquidation_value: DecimalInput = Field(ge=0)
+    total_net_unrealized_pnl: DecimalInput
+    total_net_return_percent: DecimalInput | None
     asset_type_weights: dict[AssetType, DecimalInput]
     max_position_symbol: str | None
     max_position_weight_percent: DecimalInput = Field(ge=0, le=100)
@@ -172,6 +221,10 @@ class PortfolioSnapshot(FinancialModel):
                 or self.total_market_value != ZERO_MONEY
                 or self.total_unrealized_pnl != ZERO_MONEY
                 or self.total_return_percent is not None
+                or self.total_estimated_exit_fee != ZERO_MONEY
+                or self.total_net_liquidation_value != ZERO_MONEY
+                or self.total_net_unrealized_pnl != ZERO_MONEY
+                or self.total_net_return_percent is not None
                 or self.asset_type_weights
                 or self.max_position_symbol is not None
                 or self.max_position_weight_percent != ZERO_PERCENT

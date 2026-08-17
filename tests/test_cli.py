@@ -9,6 +9,7 @@ from collections.abc import Iterator
 import pytest
 
 from finagent.cli import DEFAULT_SYSTEM_PROMPT, main, run_chat
+from finagent.core.config import Settings
 from finagent.llm import MessageRole, ModelRequest, ModelResponse, ToolCall
 
 
@@ -76,6 +77,62 @@ def test_main_without_command_prints_help(capsys: pytest.CaptureFixture[str]) ->
     captured = capsys.readouterr()
     assert "FinAgent AI 投资研究助手" in captured.out
     assert "chat" in captured.out
+    assert "dashboard" in captured.out
+
+
+def test_dashboard_starts_without_llm_key_and_uses_local_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """离线面板不依赖模型 Key，默认只监听本机 127.0.0.1:8000。"""
+
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+    calls: list[tuple[str, int]] = []
+    monkeypatch.setattr("finagent.cli.get_settings", lambda: settings)
+
+    main(["dashboard"], dashboard_runner=lambda host, port: calls.append((host, port)))
+
+    captured = capsys.readouterr()
+    assert calls == [("127.0.0.1", 8000)]
+    assert "http://127.0.0.1:8000/api/v1/health" in captured.out
+    assert "没有登录认证" not in captured.out
+
+
+def test_dashboard_custom_lan_host_prints_security_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """显式监听所有网卡时必须提醒用户局域网读写接口没有认证。"""
+
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+    calls: list[tuple[str, int]] = []
+    monkeypatch.setattr("finagent.cli.get_settings", lambda: settings)
+
+    main(
+        ["dashboard", "--host", "0.0.0.0", "--port", "9000"],
+        dashboard_runner=lambda host, port: calls.append((host, port)),
+    )
+
+    captured = capsys.readouterr()
+    assert calls == [("0.0.0.0", 9000)]
+    assert "没有登录认证" in captured.out
+    assert "可信网络" in captured.out
+
+
+def test_chat_reports_missing_llm_key_before_starting_loop(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Settings 可以无模型 Key，但 chat 命令必须在进入交互前给出明确修复提示。"""
+
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+    monkeypatch.setattr("finagent.cli.get_settings", lambda: settings)
+
+    main(["chat"])
+
+    captured = capsys.readouterr()
+    assert "模型配置失败" in captured.out
+    assert "缺少 LLM_API_KEY" in captured.out
 
 
 @pytest.mark.asyncio

@@ -30,6 +30,16 @@ def make_settings() -> Settings:
     return Settings(llm_api_key=SecretStr("test-key"), _env_file=None)  # type: ignore[call-arg]
 
 
+def test_provider_requires_llm_key_even_with_injected_client() -> None:
+    """离线 Settings 可以无 Key，但模型 Provider 创建边界必须保持严格校验。"""
+
+    client, _ = make_client(make_text_response())
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+
+    with pytest.raises(ValueError, match="缺少 LLM_API_KEY"):
+        BailianModelProvider(settings, client)
+
+
 def make_client(response: Any) -> tuple[AsyncOpenAI, AsyncMock]:
     """构造只实现本测试所需调用链的模拟 SDK 客户端。"""
 

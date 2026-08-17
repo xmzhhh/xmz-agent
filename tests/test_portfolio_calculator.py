@@ -33,6 +33,7 @@ def make_holding(
     asset_type: AssetType = AssetType.STOCK,
     quantity: str = "10",
     average_cost: str = "100",
+    estimated_exit_fee_percent: str = "0",
     currency: Currency = Currency.CNY,
 ) -> Holding:
     """通过公开校验入口构造测试持仓。"""
@@ -44,6 +45,7 @@ def make_holding(
             "asset_type": asset_type,
             "quantity": quantity,
             "average_cost": average_cost,
+            "estimated_exit_fee_percent": estimated_exit_fee_percent,
             "currency": currency,
         }
     )
@@ -82,9 +84,71 @@ def test_single_profitable_position_calculates_all_metrics() -> None:
     assert position.market_value == Decimal("1200.00")
     assert position.unrealized_pnl == Decimal("200.00")
     assert position.return_percent == Decimal("20.00")
+    assert position.estimated_exit_fee == Decimal("0.00")
+    assert position.net_liquidation_value == Decimal("1200.00")
+    assert position.net_unrealized_pnl == Decimal("200.00")
+    assert position.net_return_percent == Decimal("20.00")
     assert position.weight_percent == Decimal("100.00")
     assert snapshot.total_return_percent == Decimal("20.00")
+    assert snapshot.total_estimated_exit_fee == Decimal("0.00")
+    assert snapshot.total_net_liquidation_value == Decimal("1200.00")
+    assert snapshot.total_net_unrealized_pnl == Decimal("200.00")
+    assert snapshot.total_net_return_percent == Decimal("20.00")
     assert snapshot.concentration_hhi == Decimal("10000.00")
+
+
+def test_exit_fee_calculates_net_position_metrics_with_half_up_rounding() -> None:
+    """预计卖出费应舍入到分，并从毛市值扣除后计算净盈亏与净收益率。"""
+
+    snapshot = PortfolioCalculator(Currency.CNY).calculate(
+        [make_holding(quantity="1", average_cost="100", estimated_exit_fee_percent="0.5")],
+        [make_quote(price="101")],
+    )
+
+    position = snapshot.positions[0]
+    assert position.market_value == Decimal("101.00")
+    assert position.unrealized_pnl == Decimal("1.00")
+    assert position.return_percent == Decimal("1.00")
+    # 101.00 × 0.5% = 0.505，ROUND_HALF_UP 后是 0.51 元。
+    assert position.estimated_exit_fee == Decimal("0.51")
+    assert position.net_liquidation_value == Decimal("100.49")
+    assert position.net_unrealized_pnl == Decimal("0.49")
+    assert position.net_return_percent == Decimal("0.49")
+
+
+def test_portfolio_net_totals_sum_rounded_position_details() -> None:
+    """组合净汇总应累加已舍入明细，避免总卡片与持仓表出现一分钱差异。"""
+
+    snapshot = PortfolioCalculator(Currency.CNY).calculate(
+        [
+            make_holding("AAA", quantity="1", estimated_exit_fee_percent="0.5"),
+            make_holding(
+                "BBB",
+                quantity="2",
+                average_cost="50",
+                estimated_exit_fee_percent="1.25",
+            ),
+        ],
+        [make_quote("AAA", price="101"), make_quote("BBB", price="60")],
+    )
+
+    assert [position.estimated_exit_fee for position in snapshot.positions] == [
+        Decimal("0.51"),
+        Decimal("1.50"),
+    ]
+    assert snapshot.total_cost == Decimal("200.00")
+    assert snapshot.total_market_value == Decimal("221.00")
+    assert snapshot.total_unrealized_pnl == Decimal("21.00")
+    assert snapshot.total_return_percent == Decimal("10.50")
+    assert snapshot.total_estimated_exit_fee == Decimal("2.01")
+    assert snapshot.total_net_liquidation_value == Decimal("218.99")
+    assert snapshot.total_net_unrealized_pnl == Decimal("18.99")
+    assert snapshot.total_net_return_percent == Decimal("9.50")
+    # 风险集中度继续使用毛市值 101 和 120，而不是扣费后的净到账金额。
+    assert [position.weight_percent for position in snapshot.positions] == [
+        Decimal("45.70"),
+        Decimal("54.30"),
+    ]
 
 
 def test_losing_position_returns_negative_pnl_and_rate() -> None:
@@ -209,6 +273,10 @@ def test_empty_portfolio_returns_consistent_zero_snapshot() -> None:
     assert snapshot.positions == ()
     assert snapshot.total_market_value == Decimal("0.00")
     assert snapshot.total_return_percent is None
+    assert snapshot.total_estimated_exit_fee == Decimal("0.00")
+    assert snapshot.total_net_liquidation_value == Decimal("0.00")
+    assert snapshot.total_net_unrealized_pnl == Decimal("0.00")
+    assert snapshot.total_net_return_percent is None
     assert snapshot.max_position_symbol is None
     assert snapshot.as_of is None
 
@@ -255,6 +323,10 @@ def test_snapshot_model_rejects_inconsistent_empty_totals() -> None:
                 "total_market_value": "0.00",
                 "total_unrealized_pnl": "0.00",
                 "total_return_percent": None,
+                "total_estimated_exit_fee": "0.00",
+                "total_net_liquidation_value": "0.00",
+                "total_net_unrealized_pnl": "0.00",
+                "total_net_return_percent": None,
                 "asset_type_weights": {},
                 "max_position_symbol": None,
                 "max_position_weight_percent": "0.00",
