@@ -30,6 +30,9 @@ def test_settings_use_safe_development_defaults() -> None:
     assert settings.goldapi_cache_ttl_seconds == 900
     assert settings.market_data_mode == "fake"
     assert settings.manual_gold_price_max_age_seconds == 900
+    assert settings.database_path == (
+        Path(__file__).resolve().parents[1] / "data/private/finagent.db"
+    )
 
 
 def test_secret_key_is_masked_when_converted_to_text() -> None:
@@ -176,3 +179,38 @@ def test_settings_can_load_a_dotenv_file(tmp_path: Path) -> None:
     assert settings.llm_model == "qwen3.7-plus"
     assert settings.llm_timeout_seconds == 45
     assert settings.require_goldapi_api_key() == "gold-dotenv-key"
+
+
+def test_relative_database_path_is_resolved_from_project_root() -> None:
+    """数据库相对路径不应随 PyCharm 运行配置中的工作目录发生变化。"""
+
+    settings = Settings(
+        database_path=Path("data/private/test-finagent.db"),
+        _env_file=None,  # type: ignore[call-arg]
+    )
+
+    assert settings.database_path == (
+        Path(__file__).resolve().parents[1] / "data/private/test-finagent.db"
+    )
+
+
+def test_absolute_database_path_is_preserved(tmp_path: Path) -> None:
+    """测试和部署传入的绝对路径必须原样保留，便于使用临时数据库。"""
+
+    database_path = tmp_path / "finagent.db"
+
+    settings = Settings(
+        database_path=database_path,
+        _env_file=None,  # type: ignore[call-arg]
+    )
+
+    assert settings.database_path == database_path
+
+
+def test_blank_database_path_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """.env 中的空路径不能变成当前目录，否则 SQLite 错误会远离配置根因。"""
+
+    monkeypatch.setenv("DATABASE_PATH", "   ")
+
+    with pytest.raises(ValidationError, match="DATABASE_PATH 不能为空"):
+        Settings(_env_file=None)  # type: ignore[call-arg]

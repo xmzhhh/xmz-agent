@@ -1,13 +1,15 @@
 [project]
 name = "finagent"
-version = "0.2.2"
+version = "0.3.0"
 description = "A traceable AI investment research and portfolio monitoring agent"
 authors = [
     { name = "xmzhhh", email = "90852437+xmzhhh@users.noreply.github.com" }
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "aiosqlite>=0.22.1",
     "akshare>=1.18.64",
+    "alembic>=1.19.1",
     "fastapi>=0.139.2",
     "httpx>=0.28.1",
     "jinja2>=3.1.6",
@@ -17,6 +19,7 @@ dependencies = [
     "pydantic-settings>=2.14.2",
     "python-dotenv>=1.2.2",
     "requests>=2.34.2",
+    "sqlalchemy>=2.0.52",
     "tenacity>=9.1.4",
     "uvicorn>=0.51.0",
 ]
