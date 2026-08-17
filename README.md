@@ -43,6 +43,8 @@ FinAgent 不只是一个“接上大模型的聊天页面”。最终版本会�
 - [市场数据抽象层学习日记](docs/learning-journal/06-market-data-abstraction.md)
 - [真实基金净值与国际黄金参考价学习日记](docs/learning-journal/07-real-market-data.md)
 - [真实行情多数据源路由学习日记](docs/learning-journal/08-market-data-routing.md)
+- [模拟持仓管理与资产面板学习日记](docs/learning-journal/09-portfolio-dashboard.md)
+- [Phase 6 验收手册](docs/PHASE6_ACCEPTANCE.md)
 
 ## 当前进度
 
@@ -54,7 +56,7 @@ FinAgent 不只是一个“接上大模型的聊天页面”。最终版本会�
 - [x] 第 2 阶段（第二部分）：市场数据协议、假 Provider 与应用级保护
 - [x] 第 2 阶段（第三部分）：真实基金净值与国际黄金参考价
 - [x] 第 2 阶段（第四部分）：真实行情多数据源路由
-- [ ] 第 2 阶段（第五部分）：模拟持仓管理与资产面板
+- [x] 第 2 阶段（第五部分）：模拟持仓管理与资产面板
 - [ ] 第 3 阶段：记忆与持久化
 - [ ] 第 4 阶段：RAG 与引用
 - [ ] 第 5 阶段：上下文工程与可靠工作流
@@ -97,3 +99,44 @@ FinAgent 不只是一个“接上大模型的聊天页面”。最终版本会�
   pytest 使用假数据和假 HTTP 传输层，不消耗真实 API 额度。
 - `scripts/step06_check_market_data_routing.py` 可在 PyCharm 中离线展示一个 Service 如何把基金和黄金
   分别路由到两个 Fake Provider，并打印可核对的实际请求轨迹。
+
+## 当前模拟持仓与资产面板能力
+
+Phase 6 把持仓仓库、行情路由和确定性计算器连接成了可操作的 FastAPI 应用。当前版本支持：
+
+- 手工新增、修改和删除 `017811` 基金与 `JD-ZS-GOLD` 京东积存金模拟持仓；
+- 为京东积存金录入带服务端时间的手工卖出价，超过 15 分钟后拒绝继续估值；
+- 展示毛市值、预计卖出费、预计到账金额、净盈亏、净收益率、仓位和 HHI；
+- 在 Fake 模式载入固定匿名演示组合，不访问外部网络；
+- 在 Real 模式查询 AKShare 基金净值，并把 GoldAPI 国际金价作为独立参考信息；
+- 通过 `/api/v1` 提供持仓 CRUD、价格、面板、演示数据和健康检查 API。
+
+### 在 PyCharm 启动网页
+
+先确认项目解释器为 `C:\Users\xmz\Desktop\xmz-agent\.venv\Scripts\python.exe`，然后建立 Python
+运行配置：
+
+```text
+模块名称：finagent.cli
+形参：dashboard
+工作目录：C:\Users\xmz\Desktop\xmz-agent
+```
+
+运行后打开 <http://127.0.0.1:8000>；FastAPI 自动接口文档位于
+<http://127.0.0.1:8000/docs>。默认 `MARKET_DATA_MODE=fake`，不需要模型 Key 或 GoldAPI Key，
+适合开发和演示。如果需要手机从可信局域网访问，可把形参改成
+`dashboard --host 0.0.0.0 --port 8000`，但当前网页没有登录认证，不能暴露到公网。
+
+### 离线验收
+
+在 PyCharm 直接运行 `scripts/step07_check_portfolio_dashboard.py`，可以在不启动端口、不读取 `.env`
+且不消耗外部 API 额度的情况下，验证网页资源、匿名组合、组合估值和手工黄金价格更新。Real 模式
+和手机局域网验收步骤见 [Phase 6 验收手册](docs/PHASE6_ACCEPTANCE.md)。
+
+### 当前限制
+
+- 持仓与手工价格只保存在内存，程序重启后会清空；
+- “修改持仓”表示修正当前持仓快照，不是加仓或减仓交易；
+- 还没有交易流水、分批成本、已实现收益和单笔卖出收益试算；
+- 没有登录、多人隔离、自动交易或券商下单能力；
+- `XAU-CNY-GRAM` 只用于国际黄金参考，不能作为持仓录入。

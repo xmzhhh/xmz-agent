@@ -187,3 +187,80 @@ Router 不能仅凭六位数字推断基金，因为基金和股票代码可能�
 时传入已确认的基金代码集合，并在内存中保存为不可变 ``frozenset``；进程重启时会重新构造。
 未来持仓持久化完成后，该集合应从基金持仓自动生成。缓存仍属于具体 Provider，因为基金
 净值和黄金价格需要不同 TTL，Router 只负责确定性转发和子 Provider 生命周期。
+
+## 9. 已实现的模拟持仓与资产面板
+
+Phase 6 在既有领域层和行情层之上增加应用服务与 Web 边界：
+
+```mermaid
+flowchart TD
+    Browser["Jinja2 页面 + 原生 JavaScript/CSS"] --> API["FastAPI /api/v1"]
+    CLI["finagent dashboard"] --> Server["Uvicorn"]
+    Server --> API
+    API --> Dashboard["PortfolioDashboardService"]
+    Dashboard --> Holdings["InMemoryHoldingRepository"]
+    Dashboard --> ManualPrices["InMemoryManualPriceRepository"]
+    Dashboard --> Market["MarketDataService"]
+    Market --> Provider["Fake Provider 或 Real Router"]
+    Dashboard --> Calculator["PortfolioCalculator"]
+    Provider --> Required["017811 必要基金净值"]
+    Provider --> Reference["XAU-CNY-GRAM 可选参考价"]
+    ManualPrices --> Gold["JD-ZS-GOLD 必要手工卖出价"]
+```
+
+### 9.1 各层职责
+
+- `portfolio/`：保存资产、持仓和估值模型，并用 `Decimal` 完成纯确定性计算；不知道 HTTP、仓库或
+  行情供应商。
+- `dashboard/`：定义资产目录、持仓仓库、手工价格仓库和 `PortfolioDashboardService`；负责编排
+  持仓状态、必要行情、可选黄金参考价和计算器。
+- `web/api.py`：只负责请求校验、调用 Service、Decimal 字符串序列化和 HTTP 错误映射；不实现
+  金融公式。
+- `web/composition.py`：作为组合根，根据 `MARKET_DATA_MODE` 装配 Fake 或 Real Provider，以及
+  本阶段的两个内存仓库。
+- `web/templates/` 与 `web/static/`：作为 API 客户端展示结果，不在 JavaScript 中重复收益公式。
+- `cli.py`：把 `finagent dashboard` 参数交给 Uvicorn；默认仅监听 `127.0.0.1`，开放局域网时提示
+  无认证风险。
+
+### 9.2 完整查询流程
+
+```text
+浏览器 GET /api/v1/dashboard
+        ↓
+FastAPI 调用 PortfolioDashboardService.get_dashboard()
+        ↓
+读取持仓和手工价格的内存快照
+        ↓
+MarketDataService 查询基金必要行情
+        ↓
+PortfolioCalculator 计算毛/净口径、权重和 HHI
+        ↓
+存在京东黄金时，独立查询可降级的国际黄金参考价
+        ↓
+FastAPI 把 Decimal 序列化为字符串后返回网页
+```
+
+必要基金行情或京东手工价格缺失时，整个组合快照失败，避免展示残缺资产。国际黄金价格只用于参考，
+其 Provider 失败时组合仍然成功，并把参考栏标记为 `unavailable`。空仓直接返回自洽快照，不访问任何
+Provider。
+
+### 9.3 状态与生命周期边界
+
+当前 `InMemoryHoldingRepository` 和 `InMemoryManualPriceRepository` 都是进程内状态，因此重启
+Uvicorn 后会清空。FastAPI lifespan 退出时调用 Dashboard Service 的 `close()`，再沿调用链关闭
+MarketDataService、Router 和真实 HTTP Provider，释放连接池。下一阶段用持久化仓库替换内存实现时，
+FastAPI 路由、网页和计算器不需要改变，只需在组合根替换 Repository 实现。
+
+### 9.4 API 与错误边界
+
+正式 API 使用 `/api/v1`，金融数值统一传输为十进制字符串。主要错误映射如下：
+
+| 场景 | HTTP 状态码 |
+|---|---:|
+| 不支持的资产、非法参数 | 422 |
+| 重复持仓、演示冲突、手工价缺失或过期 | 409 |
+| 持仓不存在 | 404 |
+| 必要行情超时 | 504 |
+| 其他必要行情不可用 | 503 |
+
+这个边界保证领域异常不会泄漏为难以理解的 500，同时也不会把数据源失败伪装成正常行情。

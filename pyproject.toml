@@ -1,6 +1,6 @@
 [project]
 name = "finagent"
-version = "0.1.0"
+version = "0.2.2"
 description = "A traceable AI investment research and portfolio monitoring agent"
 authors = [
     { name = "xmzhhh", email = "90852437+xmzhhh@users.noreply.github.com" }
