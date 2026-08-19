@@ -81,16 +81,17 @@ def create_app(
     settings: Settings | None = None,
     dashboard_service: PortfolioDashboardService | None = None,
 ) -> FastAPI:
-    """创建一个拥有独立内存状态和明确关闭生命周期的 FastAPI 应用。"""
+    """创建拥有显式存储初始化与关闭生命周期的 FastAPI 应用。"""
 
     active_settings = settings or get_settings()
     service = dashboard_service or build_dashboard_service(active_settings)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-        """应用退出时沿 Service→Provider 链路释放外部资源。"""
+        """启动时检查存储，退出时沿 Service 链路释放数据库和 Provider。"""
 
         try:
+            await service.initialize()
             yield
         finally:
             await service.close()

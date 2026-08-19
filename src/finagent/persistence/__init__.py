@@ -6,6 +6,7 @@
 """
 
 from finagent.persistence.database import Base, DatabaseManager, build_sqlite_url
+from finagent.persistence.errors import DatabaseSchemaError, PersistenceError
 from finagent.persistence.models import (
     HoldingRow,
     LedgerTransactionRow,
@@ -17,10 +18,12 @@ from finagent.persistence.models import (
 __all__ = [
     "Base",
     "DatabaseManager",
+    "DatabaseSchemaError",
     "HoldingRow",
     "LedgerTransactionRow",
     "ManualPriceRow",
     "PurchaseLotRow",
+    "PersistenceError",
     "UTCDateTime",
     "build_sqlite_url",
 ]

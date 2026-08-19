@@ -26,6 +26,11 @@ from finagent.dashboard.service import (
     MANUAL_PRICE_SOURCE,
     PortfolioDashboardService,
 )
+from finagent.dashboard.unit_of_work import (
+    DashboardUnitOfWork,
+    DashboardUnitOfWorkFactory,
+    InMemoryDashboardUnitOfWorkFactory,
+)
 
 __all__ = [
     "ANONYMOUS_DEMO_GOLD_PRICE",
@@ -33,10 +38,13 @@ __all__ = [
     "DashboardClockError",
     "DashboardError",
     "DashboardSnapshot",
+    "DashboardUnitOfWork",
+    "DashboardUnitOfWorkFactory",
     "DemoPortfolioUnavailableError",
     "GoldReferenceResult",
     "GoldReferenceStatus",
     "InMemoryManualPriceRepository",
+    "InMemoryDashboardUnitOfWorkFactory",
     "JD_GOLD_SYMBOL",
     "MANUAL_PRICE_SOURCE",
     "ManualPriceInput",

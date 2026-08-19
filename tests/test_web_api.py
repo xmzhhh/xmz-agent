@@ -13,7 +13,11 @@ import httpx
 import pytest
 
 from finagent.core.config import Settings
-from finagent.dashboard import InMemoryManualPriceRepository, PortfolioDashboardService
+from finagent.dashboard import (
+    InMemoryDashboardUnitOfWorkFactory,
+    InMemoryManualPriceRepository,
+    PortfolioDashboardService,
+)
 from finagent.data import FakeMarketDataProvider, MarketDataClosedError, MarketDataService
 from finagent.portfolio import (
     Currency,
@@ -57,9 +61,13 @@ async def open_test_client(
 
     settings = Settings(_env_file=None)  # type: ignore[call-arg]
     provider = FakeMarketDataProvider(quotes, latency_seconds=provider_latency)
+    holding_repository = InMemoryHoldingRepository()
+    manual_price_repository = InMemoryManualPriceRepository()
     service = PortfolioDashboardService(
-        InMemoryHoldingRepository(),
-        InMemoryManualPriceRepository(),
+        InMemoryDashboardUnitOfWorkFactory(
+            holding_repository,
+            manual_price_repository,
+        ),
         MarketDataService(provider, request_timeout_seconds=request_timeout),
         PortfolioCalculator(Currency.CNY),
         manual_price_max_age=timedelta(seconds=900),

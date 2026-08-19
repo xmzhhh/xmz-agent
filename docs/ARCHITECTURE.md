@@ -185,12 +185,14 @@ CLI / Agent / Portfolio 应用
 
 Router 不能仅凭六位数字推断基金，因为基金和股票代码可能重叠。当前由应用在构造 Router
 时传入已确认的基金代码集合，并在内存中保存为不可变 ``frozenset``；进程重启时会重新构造。
-未来持仓持久化完成后，该集合应从基金持仓自动生成。缓存仍属于具体 Provider，因为基金
-净值和黄金价格需要不同 TTL，Router 只负责确定性转发和子 Provider 生命周期。
+Phase 7 已完成持仓持久化，但资产目录仍是显式白名单；后续支持动态资产目录时，才从已确认的
+资产元数据生成路由集合，不能直接根据六位代码猜测。缓存仍属于具体 Provider，因为基金净值和
+黄金价格需要不同 TTL，Router 只负责确定性转发和子 Provider 生命周期。
 
-## 9. 已实现的模拟持仓与资产面板
+## 9. 已实现的模拟持仓、资产面板与持久化边界
 
-Phase 6 在既有领域层和行情层之上增加应用服务与 Web 边界：
+Phase 6 在既有领域层和行情层之上增加应用服务与 Web 边界；Phase 7 使用 Unit of Work 和
+SQLAlchemy Repository 替换正式应用的内存状态，同时保留同一套 Service 与 API：
 
 ```mermaid
 flowchart TD
@@ -198,8 +200,11 @@ flowchart TD
     CLI["finagent dashboard"] --> Server["Uvicorn"]
     Server --> API
     API --> Dashboard["PortfolioDashboardService"]
-    Dashboard --> Holdings["InMemoryHoldingRepository"]
-    Dashboard --> ManualPrices["InMemoryManualPriceRepository"]
+    Dashboard --> UOW["DashboardUnitOfWork"]
+    UOW --> Holdings["SqlAlchemyHoldingRepository"]
+    UOW --> ManualPrices["SqlAlchemyManualPriceRepository"]
+    Holdings --> SQLite["SQLite finagent.db"]
+    ManualPrices --> SQLite
     Dashboard --> Market["MarketDataService"]
     Market --> Provider["Fake Provider 或 Real Router"]
     Dashboard --> Calculator["PortfolioCalculator"]
@@ -212,12 +217,14 @@ flowchart TD
 
 - `portfolio/`：保存资产、持仓和估值模型，并用 `Decimal` 完成纯确定性计算；不知道 HTTP、仓库或
   行情供应商。
-- `dashboard/`：定义资产目录、持仓仓库、手工价格仓库和 `PortfolioDashboardService`；负责编排
-  持仓状态、必要行情、可选黄金参考价和计算器。
+- `dashboard/`：定义资产目录、仓库协议、Unit of Work 协议和 `PortfolioDashboardService`；负责
+  编排持仓状态、事务边界、必要行情、可选黄金参考价和计算器。
+- `persistence/`：实现 SQLAlchemy ORM、SQLite Repository 和 Unit of Work；同一次业务写入共享
+  一个 AsyncSession，只有全部成功才提交。
 - `web/api.py`：只负责请求校验、调用 Service、Decimal 字符串序列化和 HTTP 错误映射；不实现
   金融公式。
-- `web/composition.py`：作为组合根，根据 `MARKET_DATA_MODE` 装配 Fake 或 Real Provider，以及
-  本阶段的两个内存仓库。
+- `web/composition.py`：作为组合根，根据 `MARKET_DATA_MODE` 装配 Fake 或 Real Provider；正式
+  应用装配 SQLite Unit of Work，测试与离线验收显式装配内存 Unit of Work。
 - `web/templates/` 与 `web/static/`：作为 API 客户端展示结果，不在 JavaScript 中重复收益公式。
 - `cli.py`：把 `finagent dashboard` 参数交给 Uvicorn；默认仅监听 `127.0.0.1`，开放局域网时提示
   无认证风险。
@@ -229,7 +236,9 @@ flowchart TD
         ↓
 FastAPI 调用 PortfolioDashboardService.get_dashboard()
         ↓
-读取持仓和手工价格的内存快照
+在短事务中从 SQLite 读取持仓和手工价格快照
+        ↓
+关闭数据库事务，不占用连接等待外部接口
         ↓
 MarketDataService 查询基金必要行情
         ↓
@@ -246,10 +255,15 @@ Provider。
 
 ### 9.3 状态与生命周期边界
 
-当前 `InMemoryHoldingRepository` 和 `InMemoryManualPriceRepository` 都是进程内状态，因此重启
-Uvicorn 后会清空。FastAPI lifespan 退出时调用 Dashboard Service 的 `close()`，再沿调用链关闭
-MarketDataService、Router 和真实 HTTP Provider，释放连接池。下一阶段用持久化仓库替换内存实现时，
-FastAPI 路由、网页和计算器不需要改变，只需在组合根替换 Repository 实现。
+正式应用使用 `SqlAlchemyDashboardUnitOfWorkFactory`：每次 Service 操作创建独立 AsyncSession，
+持仓与手工价格写入必须在同一事务中成功后才提交，异常时整体回滚。应用启动时检查
+`alembic_version` 是否为当前要求的迁移版本，但不会自动修改用户数据库；结构落后时提示执行
+`uv run alembic upgrade head`。FastAPI lifespan 退出时依次关闭 MarketDataService、Router、真实
+HTTP Provider 和数据库 Engine，释放 HTTP 与 SQLite 连接池。
+
+`InMemoryDashboardUnitOfWorkFactory` 只保留给自动测试和离线验收。它用状态快照模拟提交与回滚，
+从而让同一个 `PortfolioDashboardService` 可以在不修改业务代码的情况下切换存储实现。这正是
+Repository 与 Unit of Work 抽象解决的问题。
 
 ### 9.4 API 与错误边界
 

@@ -13,6 +13,7 @@ from finagent.dashboard import (
     DashboardClockError,
     DemoPortfolioUnavailableError,
     GoldReferenceStatus,
+    InMemoryDashboardUnitOfWorkFactory,
     InMemoryManualPriceRepository,
     ManualPriceInput,
     ManualPriceNotFoundError,
@@ -121,8 +122,10 @@ def build_service(
     manual_price_repository = InMemoryManualPriceRepository()
     provider = FakeMarketDataProvider(quotes)
     service = PortfolioDashboardService(
-        holding_repository,
-        manual_price_repository,
+        InMemoryDashboardUnitOfWorkFactory(
+            holding_repository,
+            manual_price_repository,
+        ),
         MarketDataService(provider),
         PortfolioCalculator(Currency.CNY),
         manual_price_max_age=timedelta(seconds=max_age_seconds),

@@ -7,7 +7,11 @@
 from datetime import UTC, datetime, timedelta
 
 from finagent.core.config import Settings
-from finagent.dashboard import InMemoryManualPriceRepository, PortfolioDashboardService
+from finagent.dashboard import (
+    InMemoryDashboardUnitOfWorkFactory,
+    InMemoryManualPriceRepository,
+    PortfolioDashboardService,
+)
 from finagent.data import (
     AkShareFundNavProvider,
     FakeMarketDataProvider,
@@ -16,6 +20,8 @@ from finagent.data import (
     MarketDataService,
     RoutingMarketDataProvider,
 )
+from finagent.persistence import DatabaseManager
+from finagent.persistence.unit_of_work import SqlAlchemyDashboardUnitOfWorkFactory
 from finagent.portfolio import (
     Currency,
     InMemoryHoldingRepository,
@@ -72,11 +78,31 @@ def build_market_data_service(settings: Settings) -> MarketDataService:
 
 
 def build_dashboard_service(settings: Settings) -> PortfolioDashboardService:
-    """装配一次进程内共享的资产面板服务及内存仓库。"""
+    """装配使用本机 SQLite 持久化状态的正式资产面板服务。"""
+
+    unit_of_work_factory = SqlAlchemyDashboardUnitOfWorkFactory(
+        DatabaseManager(settings.database_path)
+    )
 
     return PortfolioDashboardService(
-        InMemoryHoldingRepository(),
-        InMemoryManualPriceRepository(),
+        unit_of_work_factory,
+        build_market_data_service(settings),
+        PortfolioCalculator(Currency.CNY),
+        manual_price_max_age=timedelta(seconds=settings.manual_gold_price_max_age_seconds),
+        demo_enabled=settings.market_data_mode == "fake",
+    )
+
+
+def build_in_memory_dashboard_service(settings: Settings) -> PortfolioDashboardService:
+    """为自动测试和显式离线验收装配不会创建数据库文件的内存服务。"""
+
+    holding_repository = InMemoryHoldingRepository()
+    manual_price_repository = InMemoryManualPriceRepository()
+    return PortfolioDashboardService(
+        InMemoryDashboardUnitOfWorkFactory(
+            holding_repository,
+            manual_price_repository,
+        ),
         build_market_data_service(settings),
         PortfolioCalculator(Currency.CNY),
         manual_price_max_age=timedelta(seconds=settings.manual_gold_price_max_age_seconds),

@@ -153,18 +153,79 @@ SQLite 没有真正的带时区时间类型。`UTCDateTime` 在写入时拒绝�
 - 解决方法：按照 Ruff 要求把两个第三方导入放在同一组并调整顺序。
 - 学到的知识：代码生成工具的输出仍要经过项目统一质量门禁；“自动生成”不代表自动合规。
 
+## 第三小阶段：SQLite Repository、Unit of Work 与应用切换
+
+### 本小阶段完成内容
+
+- 实现 `SqlAlchemyHoldingRepository` 和 `SqlAlchemyManualPriceRepository`，把领域对象与 ORM 行
+  相互转换，但 Repository 自身不调用 `commit()`。
+- 定义 `DashboardUnitOfWork` 协议，让持仓仓库与手工价格仓库共享同一个 AsyncSession；Service
+  明确决定何时提交，异常或未提交时自动回滚。
+- 为原有内存仓库增加快照恢复能力，使自动测试也能验证真正的“全部成功或全部失败”语义。
+- 正式 FastAPI 组合根切换到 SQLite；应用启动时严格检查 Alembic 版本，退出时关闭数据库 Engine。
+- 保留显式的内存组合根给自动测试和 Phase 6 离线验收，测试不会读写个人数据库。
+- 增加应用重启测试，证明同一 SQLite 文件中的持仓与手工报价在应用关闭后仍能被新应用读取。
+
+### ORM 业务表与 Alembic 迁移分别是什么
+
+ORM 业务表是 Python 类对数据库表的长期映射：代码通过 `HoldingPositionRow` 这类对象读写字段，
+SQLAlchemy 再生成 SQL。Alembic 迁移则是数据库结构的版本历史：它按顺序记录“创建哪些表、增加
+哪些字段、如何回退”。前者描述代码当前希望看到的结构，后者负责把用户已有数据库安全地一步步
+升级到该结构，所以二者不能互相替代。
+
+### 为什么增加 Unit of Work
+
+单个 Repository 只能保证一张表的一次操作。如果删除京东黄金持仓成功、清除对应手工报价失败，
+数据库就会留下互相矛盾的状态。Unit of Work 把多个 Repository 放入同一事务：Service 完成所有
+操作后才调用 `commit()`，中间任一步异常都会回滚。Repository 因此只负责数据访问，不擅自决定
+业务事务何时结束。
+
+### 为什么查询行情前要先结束数据库事务
+
+AKShare 或 GoldAPI 可能等待数秒。如果拿着 SQLite 事务等待网络，会延长连接和锁的占用时间。
+Dashboard Service 先在短事务中读出持仓快照，退出事务后再请求行情。行情查询不修改持仓，因此
+这种设计既保留了一致的输入快照，也减少了数据库被阻塞的机会。
+
+## 本小阶段问题记录
+
+### 8. 两个内存仓库无法模拟跨仓库回滚
+
+- 问题现象：初版内存 Unit of Work 只提供统一接口；若第二个仓库操作失败，第一个仓库已经产生的
+  修改不会自动撤销。
+- 产生原因：SQLite Session 自带事务日志，而两个 Python 字典彼此独立，没有数据库回滚能力。
+- 排查思路：用“删除京东黄金持仓并同步删除手工报价”作为故障场景，检查异常后两份状态能否一起
+  恢复。
+- 解决方法：进入内存 Unit of Work 时复制两份仓库快照；没有提交或发生异常时同时恢复快照。
+- 学到的知识：实现相同 Protocol 不等于拥有相同语义；Fake 也必须忠实模拟测试所依赖的事务行为。
+
+### 9. SQL Repository 中币种类型没有通过 mypy
+
+- 问题现象：ORM 的 `currency` 字段是字符串，而领域对象要求 `Currency` 枚举，mypy 拒绝直接传入。
+- 产生原因：数据库物理层使用字符串便于设置约束和迁移，领域层使用枚举提供更强的类型安全。
+- 排查思路：确认数据库约束已经限制合法币种，再检查 ORM 到领域对象的转换边界。
+- 解决方法：读取 ORM 行时显式执行 `Currency(row.currency)`，非法历史数据会立即失败而不是静默流入
+  计算器。
+- 学到的知识：Repository 还是防腐层，必须在这里完成存储类型到领域类型的显式转换。
+
+### 10. 新增模块的导入顺序未通过 Ruff
+
+- 问题现象：功能测试通过，但 `database.py` 和 `composition.py` 被 Ruff 报告 `I001`。
+- 产生原因：新增标准库、第三方库和项目内模块后，手工排列没有完全符合项目 isort 规则。
+- 排查思路：把行为正确性与代码风格分开验证，使用 Ruff 给出的分类定位导入分组。
+- 解决方法：只调整相关文件的导入顺序，不格式化或重构无关代码。
+- 学到的知识：测试、静态类型和风格检查覆盖不同风险，不能用其中一项通过代替其他质量门禁。
+
 ## 待继续
 
-- 实现 SQLAlchemy HoldingRepository 和 ManualPriceRepository。
 - 实现交易流水与买入批次 Repository。
-- 建立跨 Repository 的 Unit of Work 事务边界。
-- 把 FastAPI 应用生命周期从内存仓库切换到 SQLite。
+- 实现加仓、减仓、卖出试算与已实现收益 TransactionService。
+- 将交易能力接入 FastAPI 与网页，同时保留当前持仓修正接口的明确语义。
 
 ## 当前验证结果
 
-- `uv run python -m pytest -q`：248 个测试通过。
+- `uv run python -m pytest -q`：252 个测试通过。
 - `uv run ruff check .`：通过。
-- `uv run mypy`：80 个源文件通过严格类型检查。
+- `uv run mypy`：85 个源文件通过严格类型检查。
 - Alembic 集成测试：空数据库升级到 `20260817_01`、`check`、降级到 base、再次升级均通过。
 - `uv build`：成功生成 `finagent-0.3.0` 的源码包和 wheel。
 - `git diff --check`：通过；Git 仅提示 Windows 工作区未来可能进行 LF/CRLF 转换。

@@ -2,7 +2,7 @@
 
 这里仅建立数据库基础设施，不创建业务表，也不调用 ``metadata.create_all``。正式数据库
 结构必须通过 Alembic 迁移演进，否则开发者无法追踪“某一版代码需要什么表结构”。
-Repository 在下一小阶段通过 :class:`DatabaseManager` 获取独立的 ``AsyncSession``。
+Repository 通过 :class:`DatabaseManager` 获取独立的 ``AsyncSession``。
 """
 
 from collections.abc import AsyncIterator
@@ -12,6 +12,7 @@ from typing import Any
 
 from sqlalchemy import MetaData, event, text
 from sqlalchemy.engine import URL
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -19,6 +20,8 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.orm import DeclarativeBase
+
+from finagent.persistence.errors import DatabaseSchemaError
 
 # 显式的约束命名让 Alembic 生成稳定、可读的迁移。若完全依赖 SQLite 自动命名，未来修改
 # 外键或唯一约束时，不同数据库后端可能得到不同名字，迁移脚本也更难审查。
@@ -115,15 +118,24 @@ class DatabaseManager:
 
         return self._engine
 
+    def create_session(self) -> AsyncSession:
+        """创建一次业务操作独占的 AsyncSession。
+
+        调用方负责提交、回滚和关闭。普通 Repository 调用优先使用 :meth:`session`；需要跨
+        多个 Repository 保持原子性的 Unit of Work 使用本方法统一管理完整生命周期。
+        """
+
+        return self._session_factory()
+
     @asynccontextmanager
     async def session(self) -> AsyncIterator[AsyncSession]:
         """为一次 Repository 操作提供独立 Session。
 
         本方法只负责创建和关闭 Session，不自动提交事务。写操作必须显式使用
-        ``session.begin()`` 或由后续 Unit of Work 统一提交，避免异常发生后仍误提交半成品。
+        ``session.begin()`` 或由 Unit of Work 统一提交，避免异常发生后仍误提交半成品。
         """
 
-        async with self._session_factory() as session:
+        async with self.create_session() as session:
             yield session
 
     async def check_connection(self) -> None:
@@ -135,6 +147,36 @@ class DatabaseManager:
         self._database_path.parent.mkdir(parents=True, exist_ok=True)
         async with self._engine.connect() as connection:
             await connection.execute(text("SELECT 1"))
+
+    async def check_schema(self, required_revision: str) -> None:
+        """确认数据库已经迁移到当前代码要求的 Alembic revision。
+
+        本方法不会自动修改数据库。迁移属于显式运维动作，启动时偷偷建表会掩盖代码版本与
+        数据库版本不一致的问题，也让开发者失去学习和审查迁移的机会。
+
+        Args:
+            required_revision: 当前应用唯一接受的 Alembic head revision。
+
+        Raises:
+            DatabaseSchemaError: 数据库未初始化，或 revision 与当前代码不一致。
+        """
+
+        await self.check_connection()
+        try:
+            async with self._engine.connect() as connection:
+                result = await connection.execute(text("SELECT version_num FROM alembic_version"))
+                revisions = set(result.scalars())
+        except OperationalError as error:
+            raise DatabaseSchemaError(
+                "数据库尚未初始化，请在项目根目录运行：uv run alembic upgrade head"
+            ) from error
+
+        if revisions != {required_revision}:
+            current = ", ".join(sorted(revisions)) if revisions else "base"
+            raise DatabaseSchemaError(
+                f"数据库版本为 {current}，当前代码要求 {required_revision}；"
+                "请运行：uv run alembic upgrade head"
+            )
 
     async def close(self) -> None:
         """释放连接池和 SQLite 文件句柄；应用生命周期结束时调用。"""
