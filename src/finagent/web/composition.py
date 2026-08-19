@@ -1,13 +1,18 @@
-"""根据应用配置装配资产面板的全部运行时依赖。
+"""根据应用配置装配资产面板和交易账本的全部运行时依赖。
 
 组合根是唯一知道“Fake 模式用哪些实现、Real 模式用哪些实现”的位置。FastAPI 路由只依赖
-``PortfolioDashboardService``，因此切换数据源时不需要修改 HTTP 接口或金融计算代码。
+已经装配好的 Dashboard 与交易 Service，因此切换数据源或数据库实现时不需要修改 HTTP 接口。
 """
 
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from finagent.core.config import Settings
-from finagent.dashboard import InMemoryManualPriceRepository, PortfolioDashboardService
+from finagent.dashboard import (
+    InMemoryDashboardUnitOfWorkFactory,
+    InMemoryManualPriceRepository,
+    PortfolioDashboardService,
+)
 from finagent.data import (
     AkShareFundNavProvider,
     FakeMarketDataProvider,
@@ -16,6 +21,9 @@ from finagent.data import (
     MarketDataService,
     RoutingMarketDataProvider,
 )
+from finagent.ledger import TransactionService
+from finagent.persistence import DatabaseManager
+from finagent.persistence.unit_of_work import SqlAlchemyDashboardUnitOfWorkFactory
 from finagent.portfolio import (
     Currency,
     InMemoryHoldingRepository,
@@ -24,6 +32,14 @@ from finagent.portfolio import (
 )
 
 SUPPORTED_FUND_SYMBOLS = frozenset({"017811"})
+
+
+@dataclass(frozen=True, slots=True)
+class ApplicationServices:
+    """正式 FastAPI 应用共享同一数据库事务工厂的两个应用服务。"""
+
+    dashboard: PortfolioDashboardService
+    transactions: TransactionService
 
 
 def _build_fake_quotes(now: datetime) -> tuple[Quote, ...]:
@@ -71,12 +87,42 @@ def build_market_data_service(settings: Settings) -> MarketDataService:
     return MarketDataService(provider)
 
 
-def build_dashboard_service(settings: Settings) -> PortfolioDashboardService:
-    """装配一次进程内共享的资产面板服务及内存仓库。"""
+def build_application_services(settings: Settings) -> ApplicationServices:
+    """装配共享 SQLite Manager、Session 工厂和写锁的正式应用服务。"""
 
+    unit_of_work_factory = SqlAlchemyDashboardUnitOfWorkFactory(
+        DatabaseManager(settings.database_path)
+    )
+
+    dashboard = PortfolioDashboardService(
+        unit_of_work_factory,
+        build_market_data_service(settings),
+        PortfolioCalculator(Currency.CNY),
+        manual_price_max_age=timedelta(seconds=settings.manual_gold_price_max_age_seconds),
+        demo_enabled=settings.market_data_mode == "fake",
+    )
+    return ApplicationServices(
+        dashboard=dashboard,
+        transactions=TransactionService(unit_of_work_factory),
+    )
+
+
+def build_dashboard_service(settings: Settings) -> PortfolioDashboardService:
+    """兼容只需要 Dashboard Service 的脚本；正式 Web 使用完整服务集合。"""
+
+    return build_application_services(settings).dashboard
+
+
+def build_in_memory_dashboard_service(settings: Settings) -> PortfolioDashboardService:
+    """为自动测试和显式离线验收装配不会创建数据库文件的内存服务。"""
+
+    holding_repository = InMemoryHoldingRepository()
+    manual_price_repository = InMemoryManualPriceRepository()
     return PortfolioDashboardService(
-        InMemoryHoldingRepository(),
-        InMemoryManualPriceRepository(),
+        InMemoryDashboardUnitOfWorkFactory(
+            holding_repository,
+            manual_price_repository,
+        ),
         build_market_data_service(settings),
         PortfolioCalculator(Currency.CNY),
         manual_price_max_age=timedelta(seconds=settings.manual_gold_price_max_age_seconds),

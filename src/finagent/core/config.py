@@ -46,6 +46,7 @@ class Settings(BaseSettings):
         goldapi_cache_ttl_seconds: 国际黄金参考价的进程内缓存秒数。
         market_data_mode: 资产面板使用固定 Fake 行情还是真实行情 Provider。
         manual_gold_price_max_age_seconds: 手工京东卖出价允许使用的最大秒数。
+        database_path: SQLite 数据库文件路径；相对路径统一以项目根目录解析。
     """
 
     model_config = SettingsConfigDict(
@@ -72,6 +73,49 @@ class Settings(BaseSettings):
     goldapi_cache_ttl_seconds: float = Field(default=900.0, gt=0, le=86_400)
     market_data_mode: MarketDataMode = "fake"
     manual_gold_price_max_age_seconds: int = Field(default=900, gt=0, le=86_400)
+    database_path: Path = Path("data/private/finagent.db")
+
+    @field_validator("database_path", mode="before")
+    @classmethod
+    def reject_blank_database_path(cls, value: object) -> object:
+        """拒绝空数据库路径，避免误把项目目录本身当成数据库文件。
+
+        ``Path("")`` 会被 Python 解释为当前目录。如果直接接受空环境变量，后续连接
+        SQLite 时只会得到难以理解的“无法打开数据库”错误，因此在配置边界尽早失败。
+
+        Args:
+            value: 来自默认值、环境变量或测试参数的原始配置。
+
+        Returns:
+            未修改的非空配置，继续交给 Pydantic 转换为 :class:`Path`。
+
+        Raises:
+            ValueError: 字符串配置为空或只包含空白。
+        """
+
+        if isinstance(value, str) and not value.strip():
+            raise ValueError("DATABASE_PATH 不能为空")
+        return value
+
+    @field_validator("database_path")
+    @classmethod
+    def resolve_database_path(cls, value: Path) -> Path:
+        """把相对数据库路径固定解析到项目根目录。
+
+        PyCharm 运行脚本、pytest 和 ``finagent`` 命令的当前工作目录可能不同。若直接把
+        相对路径交给 SQLite，同一份配置可能创建多个数据库文件。这里统一转换成绝对路径，
+        保证所有入口使用同一个本机数据库。
+
+        Args:
+            value: Pydantic 已转换完成的路径。
+
+        Returns:
+            绝对路径保持不变；相对路径返回基于项目根目录解析后的绝对路径。
+        """
+
+        if value.is_absolute():
+            return value
+        return (PROJECT_ROOT / value).resolve()
 
     @field_validator("llm_api_key")
     @classmethod

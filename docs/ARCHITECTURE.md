@@ -185,12 +185,14 @@ CLI / Agent / Portfolio 应用
 
 Router 不能仅凭六位数字推断基金，因为基金和股票代码可能重叠。当前由应用在构造 Router
 时传入已确认的基金代码集合，并在内存中保存为不可变 ``frozenset``；进程重启时会重新构造。
-未来持仓持久化完成后，该集合应从基金持仓自动生成。缓存仍属于具体 Provider，因为基金
-净值和黄金价格需要不同 TTL，Router 只负责确定性转发和子 Provider 生命周期。
+Phase 7 已完成持仓持久化，但资产目录仍是显式白名单；后续支持动态资产目录时，才从已确认的
+资产元数据生成路由集合，不能直接根据六位代码猜测。缓存仍属于具体 Provider，因为基金净值和
+黄金价格需要不同 TTL，Router 只负责确定性转发和子 Provider 生命周期。
 
-## 9. 已实现的模拟持仓与资产面板
+## 9. 已实现的模拟持仓、资产面板与持久化边界
 
-Phase 6 在既有领域层和行情层之上增加应用服务与 Web 边界：
+Phase 6 在既有领域层和行情层之上增加应用服务与 Web 边界；Phase 7 使用 Unit of Work 和
+SQLAlchemy Repository 替换正式应用的内存状态，同时保留同一套 Service 与 API：
 
 ```mermaid
 flowchart TD
@@ -198,8 +200,17 @@ flowchart TD
     CLI["finagent dashboard"] --> Server["Uvicorn"]
     Server --> API
     API --> Dashboard["PortfolioDashboardService"]
-    Dashboard --> Holdings["InMemoryHoldingRepository"]
-    Dashboard --> ManualPrices["InMemoryManualPriceRepository"]
+    API --> Transactions["TransactionService"]
+    Dashboard --> UOW["DashboardUnitOfWork"]
+    Transactions --> UOW
+    UOW --> Holdings["SqlAlchemyHoldingRepository"]
+    UOW --> ManualPrices["SqlAlchemyManualPriceRepository"]
+    UOW --> Ledger["SqlAlchemyLedgerTransactionRepository"]
+    UOW --> Lots["SqlAlchemyPurchaseLotRepository"]
+    Holdings --> SQLite["SQLite finagent.db"]
+    ManualPrices --> SQLite
+    Ledger --> SQLite
+    Lots --> SQLite
     Dashboard --> Market["MarketDataService"]
     Market --> Provider["Fake Provider 或 Real Router"]
     Dashboard --> Calculator["PortfolioCalculator"]
@@ -212,12 +223,15 @@ flowchart TD
 
 - `portfolio/`：保存资产、持仓和估值模型，并用 `Decimal` 完成纯确定性计算；不知道 HTTP、仓库或
   行情供应商。
-- `dashboard/`：定义资产目录、持仓仓库、手工价格仓库和 `PortfolioDashboardService`；负责编排
-  持仓状态、必要行情、可选黄金参考价和计算器。
-- `web/api.py`：只负责请求校验、调用 Service、Decimal 字符串序列化和 HTTP 错误映射；不实现
+- `dashboard/`：定义资产目录、仓库协议、Unit of Work 协议和 `PortfolioDashboardService`；负责
+  编排持仓状态、事务边界、必要行情、可选黄金参考价和计算器。
+- `persistence/`：实现 SQLAlchemy ORM、SQLite Repository 和 Unit of Work；同一次业务写入共享
+  一个 AsyncSession，只有全部成功才提交。
+- `web/app.py`：只负责请求校验、调用 Service、Decimal 字符串序列化和 HTTP 错误映射；不实现
   金融公式。
-- `web/composition.py`：作为组合根，根据 `MARKET_DATA_MODE` 装配 Fake 或 Real Provider，以及
-  本阶段的两个内存仓库。
+- `web/composition.py`：作为组合根，根据 `MARKET_DATA_MODE` 装配 Fake 或 Real Provider；正式
+  应用让 Dashboard Service 和 TransactionService 共享同一个 SQLite Unit of Work 工厂，测试与
+  离线验收仍可显式装配内存实现。
 - `web/templates/` 与 `web/static/`：作为 API 客户端展示结果，不在 JavaScript 中重复收益公式。
 - `cli.py`：把 `finagent dashboard` 参数交给 Uvicorn；默认仅监听 `127.0.0.1`，开放局域网时提示
   无认证风险。
@@ -229,7 +243,9 @@ flowchart TD
         ↓
 FastAPI 调用 PortfolioDashboardService.get_dashboard()
         ↓
-读取持仓和手工价格的内存快照
+在短事务中从 SQLite 读取持仓和手工价格快照
+        ↓
+关闭数据库事务，不占用连接等待外部接口
         ↓
 MarketDataService 查询基金必要行情
         ↓
@@ -246,10 +262,15 @@ Provider。
 
 ### 9.3 状态与生命周期边界
 
-当前 `InMemoryHoldingRepository` 和 `InMemoryManualPriceRepository` 都是进程内状态，因此重启
-Uvicorn 后会清空。FastAPI lifespan 退出时调用 Dashboard Service 的 `close()`，再沿调用链关闭
-MarketDataService、Router 和真实 HTTP Provider，释放连接池。下一阶段用持久化仓库替换内存实现时，
-FastAPI 路由、网页和计算器不需要改变，只需在组合根替换 Repository 实现。
+正式应用使用 `SqlAlchemyDashboardUnitOfWorkFactory`：每次 Service 操作创建独立 AsyncSession，
+持仓与手工价格写入必须在同一事务中成功后才提交，异常时整体回滚。应用启动时检查
+`alembic_version` 是否为当前要求的迁移版本，但不会自动修改用户数据库；结构落后时提示执行
+`uv run alembic upgrade head`。FastAPI lifespan 退出时依次关闭 MarketDataService、Router、真实
+HTTP Provider 和数据库 Engine，释放 HTTP 与 SQLite 连接池。
+
+`InMemoryDashboardUnitOfWorkFactory` 只保留给自动测试和离线验收。它用状态快照模拟提交与回滚，
+从而让同一个 `PortfolioDashboardService` 可以在不修改业务代码的情况下切换存储实现。这正是
+Repository 与 Unit of Work 抽象解决的问题。
 
 ### 9.4 API 与错误边界
 
@@ -258,9 +279,72 @@ FastAPI 路由、网页和计算器不需要改变，只需在组合根替换 Re
 | 场景 | HTTP 状态码 |
 |---|---:|
 | 不支持的资产、非法参数 | 422 |
-| 重复持仓、演示冲突、手工价缺失或过期 | 409 |
+| 重复持仓、演示冲突、手工价缺失或过期、账本状态冲突 | 409 |
 | 持仓不存在 | 404 |
 | 必要行情超时 | 504 |
 | 其他必要行情不可用 | 503 |
 
 这个边界保证领域异常不会泄漏为难以理解的 500，同时也不会把数据源失败伪装成正常行情。
+
+## 10. 已实现的交易账本领域服务
+
+Phase 7 的 `TransactionService` 在网页之外先建立可独立测试的交易业务边界：
+
+```text
+BuyRequest / SellRequest
+        ↓
+TransactionService（金额舍入、FIFO、业务校验）
+        ↓
+SqlAlchemy Unit of Work
+        ├── holding_positions：当前状态投影
+        ├── ledger_transactions：不可变交易事实
+        ├── purchase_lots：各批剩余数量与单位成本
+        └── manual_prices：黄金清仓时清除旧手工价
+```
+
+### 10.1 金额与批次口径
+
+- 买入金额为 `数量 × 确认单价`，实际支出为买入金额加手续费；手续费计入该批单位成本。
+- 卖出金额为 `数量 × 确认单价`，实际到账为卖出金额减手续费；已实现收益等于实际到账减去
+  FIFO 批次成本。
+- 数量、单价和单位成本最多保存 8 位小数；人民币金额使用 `ROUND_HALF_UP` 统一保留两位。
+- 手续费使用平台显示的预计或最终金额，不硬编码产品费率。费率可能依持有时间和渠道变化，
+  最终确认结果比通用规则更可靠。
+- 卖出试算是只读操作；只有用户明确确认后调用 `record_sell`，才会更新数据库。
+
+### 10.2 期初持仓与历史边界
+
+Phase 6 创建的持仓只有数量和平均成本，没有原始买入流水。系统不会伪造历史交易；第一次通过
+交易服务操作前，必须调用 `initialize_opening_position`，由用户提供取得时间并创建明确标记的
+`opening` 流水和首个批次。当前版本只允许按时间顺序追加交易，插入更早历史需要重放之后全部
+FIFO 结果，留待后续专门的账本重建能力处理。
+
+交易写入共享同一个 AsyncSession。流水、批次和持仓任何一步失败，整个 Unit of Work 回滚；
+清仓时持仓被删除，但历史流水和已归零批次继续保留用于审计。
+
+### 10.3 FastAPI 与网页交易流程
+
+交易账本通过同一 `/api/v1` 暴露，不让浏览器直接访问 Repository：
+
+| API | 用途 | 是否写数据库 |
+|---|---|---|
+| `POST /transactions/opening` | 把已有持仓快照登记为期初 FIFO 批次 | 是 |
+| `POST /transactions/buy` | 记录买入，追加流水和批次并更新持仓投影 | 是 |
+| `POST /transactions/sell-preview` | 根据当前批次计算到账、成本和预计已实现收益 | 否 |
+| `POST /transactions/sell` | 用户确认后重新校验并正式卖出 | 是 |
+| `GET /transactions` | 查询按发生时间排序的不可变流水 | 否 |
+| `GET /transactions/realized-pnl` | 汇总已确认卖出的已实现收益 | 否 |
+
+网页中的卖出表单不能直接调用确认接口。它先保存原始十进制字符串请求并展示后端试算；用户修改
+任何字段都会清除试算，只有点击试算结果中的“确认并写入卖出流水”才提交同一份请求。服务端不会
+信任旧试算结果，而是依据数据库最新批次重新计算，因此即使两个页面同时操作，也不会用过期批次
+静默落账。
+
+持仓快照 CRUD 仅用于录入尚未建立账本的历史起点。一旦某个代码已经存在流水，API 会抛出
+`LedgerManagedHoldingError` 并返回 409，网页把操作栏改为“账本管理”。这个限制防止用户绕过
+交易流水直接改数量，造成当前持仓、FIFO 批次和审计历史互相矛盾。
+
+`scripts/step08_check_persistence_ledger.py` 使用一次性 SQLite 文件验收这条完整链路。它先通过
+Alembic 创建正式表结构，再让三份先后启动的 FastAPI 应用连接同一个文件，分别完成写入、重启
+读取、卖出和再次重启读取。只有重新创建 Engine 后仍能恢复持仓、批次结果和流水，才能证明数据
+来自持久化存储，而不是某个进程内对象尚未被释放。脚本固定使用 Fake 行情，结束后删除临时文件。

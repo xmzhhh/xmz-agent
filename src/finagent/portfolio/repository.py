@@ -176,3 +176,15 @@ class InMemoryHoldingRepository:
         """在已经持有异步锁时构建确定性持仓快照。"""
 
         return tuple(self._holdings[symbol] for symbol in sorted(self._holdings))
+
+    async def _snapshot_state(self) -> dict[str, Holding]:
+        """为内存 Unit of Work 复制可回滚状态；不属于公共 Repository 协议。"""
+
+        async with self._lock:
+            return dict(self._holdings)
+
+    async def _restore_state(self, snapshot: dict[str, Holding]) -> None:
+        """在内存事务失败时恢复快照；只由同模块约定的工作单元调用。"""
+
+        async with self._lock:
+            self._holdings = dict(snapshot)

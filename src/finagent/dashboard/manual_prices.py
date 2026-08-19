@@ -57,3 +57,15 @@ class InMemoryManualPriceRepository:
         normalized_symbol = normalize_asset_symbol(symbol)
         async with self._lock:
             return self._price_by_symbol.pop(normalized_symbol, None)
+
+    async def _snapshot_state(self) -> dict[str, ManualPriceRecord]:
+        """为内存 Unit of Work 复制可回滚状态；不属于公共 Repository 协议。"""
+
+        async with self._lock:
+            return dict(self._price_by_symbol)
+
+    async def _restore_state(self, snapshot: dict[str, ManualPriceRecord]) -> None:
+        """在内存事务失败时恢复快照；只由工作单元调用。"""
+
+        async with self._lock:
+            self._price_by_symbol = dict(snapshot)

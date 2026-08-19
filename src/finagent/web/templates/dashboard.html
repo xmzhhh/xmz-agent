@@ -28,7 +28,7 @@
 
     <aside class="safety-notice" aria-label="使用范围提示">
         <strong>教学与模拟用途</strong>
-        <span>当前页面不连接券商、不执行交易。持仓和手工价格只保存在本次进程内，服务重启后清空。</span>
+        <span>当前页面不连接券商、不执行真实交易。持仓、手工价格和模拟交易账本保存在本地 SQLite 数据库中。</span>
     </aside>
 
     <div id="page-message" class="message" role="status" aria-live="polite" hidden></div>
@@ -72,7 +72,7 @@
                 <div class="panel-heading">
                     <div>
                         <p class="section-kicker">Position editor</p>
-                        <h2 id="holding-form-title">新增持仓</h2>
+                        <h2 id="holding-form-title">录入持仓快照</h2>
                     </div>
                     <button id="cancel-edit-button" class="text-button" type="button" hidden>取消编辑</button>
                 </div>
@@ -100,9 +100,12 @@
                     <input id="holding-fee-rate" name="estimated_exit_fee_percent" type="text"
                            inputmode="decimal" value="0" required>
                     <p class="field-help">输入 0.5 表示 0.5%，不是 50%。</p>
+                    <p class="field-help">
+                        这里只录入尚未建立账本的已有持仓。建立期初批次后，请通过下方交易账本加仓或卖出。
+                    </p>
 
                     <button id="holding-submit-button" class="button button-primary button-wide" type="submit">
-                        新增持仓
+                        录入持仓快照
                     </button>
                 </form>
             </article>
@@ -164,6 +167,166 @@
                     </div>
                 </dl>
             </article>
+        </section>
+
+        <section class="section-block" aria-labelledby="ledger-title">
+            <div class="section-heading">
+                <div>
+                    <p class="section-kicker">Transaction ledger</p>
+                    <h2 id="ledger-title">模拟交易账本</h2>
+                </div>
+                <p class="section-meta">
+                    累计已实现收益：<strong id="realized-pnl">—</strong>
+                </p>
+            </div>
+
+            <p class="section-intro">
+                已有持仓先登记一次期初批次；之后每次买入或卖出都形成不可变流水。
+                卖出必须先试算，再由你明确确认，页面不会自动提交交易。
+            </p>
+
+            <div class="ledger-grid">
+                <article class="ledger-card form-panel">
+                    <div class="panel-heading">
+                        <div>
+                            <p class="section-kicker">Opening lot</p>
+                            <h3>初始化已有持仓</h3>
+                        </div>
+                    </div>
+                    <form id="opening-form">
+                        <label for="opening-symbol">尚未进入账本的持仓</label>
+                        <select id="opening-symbol" name="symbol" required>
+                            <option value="">暂无可初始化持仓</option>
+                        </select>
+                        <label for="opening-acquired-at">原始取得时间</label>
+                        <input id="opening-acquired-at" name="acquired_at" type="datetime-local" required>
+                        <label for="opening-note">备注（可选）</label>
+                        <input id="opening-note" name="note" type="text" maxlength="500"
+                               placeholder="例如：从蚂蚁财富现有持仓开始记账">
+                        <button class="button button-secondary button-wide" type="submit">建立期初批次</button>
+                    </form>
+                </article>
+
+                <article class="ledger-card form-panel">
+                    <div class="panel-heading">
+                        <div>
+                            <p class="section-kicker">Buy</p>
+                            <h3>记录买入 / 加仓</h3>
+                        </div>
+                    </div>
+                    <form id="buy-form">
+                        <label for="buy-symbol">资产</label>
+                        <select id="buy-symbol" name="symbol" required>
+                            <option value="">请选择资产</option>
+                        </select>
+                        <div class="form-row">
+                            <div>
+                                <label for="buy-quantity">买入数量</label>
+                                <input id="buy-quantity" name="quantity" type="text" inputmode="decimal" required>
+                            </div>
+                            <div>
+                                <label for="buy-unit-price">成交单价</label>
+                                <input id="buy-unit-price" name="unit_price" type="text" inputmode="decimal" required>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div>
+                                <label for="buy-fee-amount">实际手续费</label>
+                                <input id="buy-fee-amount" name="fee_amount" type="text" inputmode="decimal"
+                                       value="0" required>
+                            </div>
+                            <div>
+                                <label for="buy-exit-fee-rate">预计卖出费率（%）</label>
+                                <input id="buy-exit-fee-rate" name="estimated_exit_fee_percent" type="text"
+                                       inputmode="decimal" value="0" required>
+                            </div>
+                        </div>
+                        <label for="buy-occurred-at">成交时间</label>
+                        <input id="buy-occurred-at" name="occurred_at" type="datetime-local" required>
+                        <label for="buy-note">备注（可选）</label>
+                        <input id="buy-note" name="note" type="text" maxlength="500">
+                        <button class="button button-primary button-wide" type="submit">确认记录买入</button>
+                    </form>
+                </article>
+
+                <article class="ledger-card form-panel">
+                    <div class="panel-heading">
+                        <div>
+                            <p class="section-kicker">Sell</p>
+                            <h3>卖出试算与确认</h3>
+                        </div>
+                    </div>
+                    <form id="sell-form">
+                        <label for="sell-symbol">已进入账本的持仓</label>
+                        <select id="sell-symbol" name="symbol" required>
+                            <option value="">暂无可卖持仓</option>
+                        </select>
+                        <div class="form-row">
+                            <div>
+                                <label for="sell-quantity">卖出数量</label>
+                                <input id="sell-quantity" name="quantity" type="text" inputmode="decimal" required>
+                            </div>
+                            <div>
+                                <label for="sell-unit-price">成交单价</label>
+                                <input id="sell-unit-price" name="unit_price" type="text" inputmode="decimal" required>
+                            </div>
+                        </div>
+                        <label for="sell-fee-amount">预计或实际手续费</label>
+                        <input id="sell-fee-amount" name="fee_amount" type="text" inputmode="decimal"
+                               value="0" required>
+                        <label for="sell-occurred-at">成交时间</label>
+                        <input id="sell-occurred-at" name="occurred_at" type="datetime-local" required>
+                        <label for="sell-note">备注（可选）</label>
+                        <input id="sell-note" name="note" type="text" maxlength="500">
+                        <button class="button button-secondary button-wide" type="submit">先计算卖出结果</button>
+                    </form>
+
+                    <div id="sell-preview" class="sell-preview" hidden>
+                        <h4>卖出试算</h4>
+                        <dl class="preview-grid">
+                            <div><dt>卖出金额</dt><dd id="preview-gross">—</dd></div>
+                            <div><dt>预计到账</dt><dd id="preview-cash">—</dd></div>
+                            <div><dt>FIFO 成本</dt><dd id="preview-cost">—</dd></div>
+                            <div><dt>预计已实现收益</dt><dd id="preview-pnl">—</dd></div>
+                            <div><dt>卖后剩余数量</dt><dd id="preview-remaining">—</dd></div>
+                        </dl>
+                        <p class="field-help">修改任一卖出参数后，必须重新试算。</p>
+                        <button id="confirm-sell-button" class="button button-danger button-wide" type="button">
+                            确认并写入卖出流水
+                        </button>
+                    </div>
+                </article>
+            </div>
+
+            <div class="transaction-history">
+                <div class="panel-heading">
+                    <div>
+                        <p class="section-kicker">Audit trail</p>
+                        <h3>交易记录</h3>
+                    </div>
+                    <span id="transaction-count" class="section-meta">0 笔流水</span>
+                </div>
+                <div class="table-wrap">
+                    <table class="ledger-table">
+                        <thead>
+                        <tr>
+                            <th scope="col">发生时间</th>
+                            <th scope="col">类型 / 资产</th>
+                            <th scope="col">数量 / 单价</th>
+                            <th scope="col">交易金额 / 费用</th>
+                            <th scope="col">现金金额</th>
+                            <th scope="col">已实现收益</th>
+                            <th scope="col">备注</th>
+                        </tr>
+                        </thead>
+                        <tbody id="transactions-body">
+                        <tr class="empty-row">
+                            <td colspan="7">尚无交易记录。</td>
+                        </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </section>
 
         <section class="section-block" aria-labelledby="positions-title">
@@ -252,7 +415,7 @@
     </main>
 
     <footer>
-        FinAgent v0.2.2 规划版本 · 页面展示 API 结果，不构成投资建议
+        FinAgent v0.3.0 开发阶段 · 页面展示 API 结果，不构成投资建议
     </footer>
 </div>
 

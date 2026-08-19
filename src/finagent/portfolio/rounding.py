@@ -8,6 +8,7 @@ from decimal import ROUND_HALF_UP, Decimal
 
 MONEY_QUANTUM = Decimal("0.01")
 PERCENT_QUANTUM = Decimal("0.01")
+FINANCIAL_QUANTUM = Decimal("0.00000001")
 ZERO_MONEY = Decimal("0.00")
 ZERO_PERCENT = Decimal("0.00")
 ONE_HUNDRED_PERCENT = Decimal("100.00")
@@ -23,3 +24,9 @@ def round_percent(value: Decimal) -> Decimal:
     """把百分比或 HHI 指标按四舍五入规则保留两位小数。"""
 
     return value.quantize(PERCENT_QUANTUM, rounding=ROUND_HALF_UP)
+
+
+def round_financial(value: Decimal) -> Decimal:
+    """把数量、单价或单位成本限制为数据库支持的 8 位小数。"""
+
+    return value.quantize(FINANCIAL_QUANTUM, rounding=ROUND_HALF_UP)

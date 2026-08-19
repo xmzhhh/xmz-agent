@@ -5,7 +5,6 @@
 只作为可选参考，失败不会污染或阻断必要的组合估值。
 """
 
-import asyncio
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
@@ -25,6 +24,7 @@ from finagent.dashboard.models import (
     ManualPriceInput,
     ManualPriceRecord,
 )
+from finagent.dashboard.unit_of_work import DashboardUnitOfWorkFactory
 from finagent.data.errors import MarketDataError
 from finagent.data.goldapi import GOLD_REFERENCE_SYMBOL
 from finagent.portfolio.calculator import PortfolioCalculator
@@ -42,7 +42,6 @@ from finagent.portfolio.models import (
     HoldingUpdate,
     Quote,
 )
-from finagent.portfolio.repository import HoldingRepository
 
 type Clock = Callable[[], datetime]
 
@@ -100,8 +99,7 @@ class PortfolioDashboardService:
     """对外提供资产目录、持仓管理、手工价格和面板快照。
 
     Args:
-        holding_repository: 规范持仓的异步仓库。
-        manual_price_repository: 手工价格的异步仓库。
+        unit_of_work_factory: 为每次状态操作提供共享事务的两个 Repository。
         market_data: 已包含超时和行情校验的市场数据服务。
         calculator: 不访问外部资源的确定性组合计算器。
         catalog: 受支持资产目录。
@@ -112,8 +110,7 @@ class PortfolioDashboardService:
 
     def __init__(
         self,
-        holding_repository: HoldingRepository,
-        manual_price_repository: ManualPriceRepository,
+        unit_of_work_factory: DashboardUnitOfWorkFactory,
         market_data: MarketDataReader,
         calculator: PortfolioCalculator,
         *,
@@ -125,16 +122,13 @@ class PortfolioDashboardService:
         if manual_price_max_age < timedelta(0):
             raise ValueError("manual_price_max_age 不能为负数")
 
-        self._holding_repository = holding_repository
-        self._manual_price_repository = manual_price_repository
+        self._unit_of_work_factory = unit_of_work_factory
         self._market_data = market_data
         self._calculator = calculator
         self._catalog = catalog
         self._manual_price_max_age = manual_price_max_age
         self._clock = clock
         self._demo_enabled = demo_enabled
-        # 该锁只保护跨“持仓仓库 + 手工价格仓库”的本地状态切换，不在网络请求期间持有。
-        self._state_lock = asyncio.Lock()
 
     def list_assets(self) -> tuple[AssetDefinition, ...]:
         """返回前端可以展示的完整受支持资产目录。"""
@@ -144,43 +138,48 @@ class PortfolioDashboardService:
     async def list_holdings(self) -> tuple[Holding, ...]:
         """返回当前持仓快照。"""
 
-        async with self._state_lock:
-            return await self._holding_repository.list_holdings()
+        async with self._unit_of_work_factory() as unit_of_work:
+            return await unit_of_work.holdings.list_holdings()
 
     async def get_holding(self, symbol: str) -> Holding:
         """按代码读取持仓。"""
 
-        async with self._state_lock:
-            return await self._holding_repository.get_holding(symbol)
+        async with self._unit_of_work_factory() as unit_of_work:
+            return await unit_of_work.holdings.get_holding(symbol)
 
     async def create_holding(self, data: HoldingCreate) -> Holding:
         """创建规范持仓；手工估值资产允许稍后再录入价格。"""
 
-        async with self._state_lock:
-            return await self._holding_repository.create_holding(data)
+        async with self._unit_of_work_factory() as unit_of_work:
+            holding = await unit_of_work.holdings.create_holding(data)
+            await unit_of_work.commit()
+            return holding
 
     async def update_holding(self, symbol: str, data: HoldingUpdate) -> Holding:
         """更新持仓的数量、成本和预计卖出费率。"""
 
-        async with self._state_lock:
-            return await self._holding_repository.update_holding(symbol, data)
+        async with self._unit_of_work_factory() as unit_of_work:
+            holding = await unit_of_work.holdings.update_holding(symbol, data)
+            await unit_of_work.commit()
+            return holding
 
     async def delete_holding(self, symbol: str) -> Holding:
         """删除持仓；手工估值资产的孤立价格会在同一临界区内同步清除。"""
 
-        async with self._state_lock:
-            deleted = await self._holding_repository.delete_holding(symbol)
+        async with self._unit_of_work_factory() as unit_of_work:
+            deleted = await unit_of_work.holdings.delete_holding(symbol)
             asset = self._catalog.get(deleted.symbol)
             if asset.valuation_method is AssetValuationMethod.MANUAL_PRICE:
-                await self._manual_price_repository.delete_price(deleted.symbol)
+                await unit_of_work.manual_prices.delete_price(deleted.symbol)
+            await unit_of_work.commit()
             return deleted
 
     async def get_manual_price(self, symbol: str) -> ManualPriceRecord:
         """读取手工价格记录；本接口允许返回已经过期的记录供用户查看和更新。"""
 
         asset = self._require_manual_price_asset(symbol)
-        async with self._state_lock:
-            record = await self._manual_price_repository.get_price(asset.symbol)
+        async with self._unit_of_work_factory() as unit_of_work:
+            record = await unit_of_work.manual_prices.get_price(asset.symbol)
         if record is None:
             raise ManualPriceNotFoundError(f"资产 {asset.symbol} 尚未录入手工卖出价")
         return record
@@ -194,15 +193,19 @@ class PortfolioDashboardService:
 
         asset = self._require_manual_price_asset(symbol)
         record = self._build_manual_price_record(asset, data, self._current_time())
-        async with self._state_lock:
-            return await self._manual_price_repository.save_price(record)
+        async with self._unit_of_work_factory() as unit_of_work:
+            saved = await unit_of_work.manual_prices.save_price(record)
+            await unit_of_work.commit()
+            return saved
 
     async def delete_manual_price(self, symbol: str) -> ManualPriceRecord:
         """删除手工价格，不存在时返回明确业务异常。"""
 
         asset = self._require_manual_price_asset(symbol)
-        async with self._state_lock:
-            deleted = await self._manual_price_repository.delete_price(asset.symbol)
+        async with self._unit_of_work_factory() as unit_of_work:
+            deleted = await unit_of_work.manual_prices.delete_price(asset.symbol)
+            if deleted is not None:
+                await unit_of_work.commit()
         if deleted is None:
             raise ManualPriceNotFoundError(f"资产 {asset.symbol} 尚未录入手工卖出价")
         return deleted
@@ -210,15 +213,18 @@ class PortfolioDashboardService:
     async def get_dashboard(self) -> DashboardSnapshot:
         """生成必要数据完整、可选参考价可降级的一次资产面板快照。"""
 
-        # 只在锁内复制内存状态，随后释放锁再访问外部行情，避免慢网络阻塞持仓 CRUD。
-        async with self._state_lock:
-            holdings = await self._holding_repository.list_holdings()
+        # 只在短事务中读取状态，随后关闭 Session 再访问外部行情，避免慢网络长期占用数据库。
+        async with self._unit_of_work_factory() as unit_of_work:
+            holdings = await unit_of_work.holdings.list_holdings()
             if not holdings:
                 return DashboardSnapshot(
                     portfolio=self._calculator.calculate((), ()),
                     gold_reference=self._not_requested_reference(),
                 )
-            manual_records = await self._read_required_manual_prices(holdings)
+            manual_records = await self._read_required_manual_prices(
+                holdings,
+                unit_of_work.manual_prices,
+            )
 
         manual_quotes = tuple(
             self._manual_record_to_quote(manual_records[holding.symbol])
@@ -254,30 +260,33 @@ class PortfolioDashboardService:
             ANONYMOUS_DEMO_GOLD_PRICE,
             self._current_time(),
         )
-        async with self._state_lock:
-            existing_price = await self._manual_price_repository.get_price(JD_GOLD_SYMBOL)
+        async with self._unit_of_work_factory() as unit_of_work:
+            existing_price = await unit_of_work.manual_prices.get_price(JD_GOLD_SYMBOL)
             if existing_price is not None:
                 raise DemoPortfolioConflictError("已经存在手工黄金价格，不能载入演示组合")
 
-            holdings = await self._holding_repository.load_demo(ANONYMOUS_DEMO_HOLDINGS)
-            try:
-                await self._manual_price_repository.save_price(demo_record)
-            except Exception:
-                # 当前阶段的两个仓库都在内存中。若第二次写入意外失败，回滚已载入持仓，
-                # 保持“不覆盖、不合并、不留下半批数据”的演示语义。
-                for holding in holdings:
-                    await self._holding_repository.delete_holding(holding.symbol)
-                raise
+            holdings = await unit_of_work.holdings.load_demo(ANONYMOUS_DEMO_HOLDINGS)
+            await unit_of_work.manual_prices.save_price(demo_record)
+            await unit_of_work.commit()
             return holdings
 
-    async def close(self) -> None:
-        """释放 Dashboard Service 所拥有的底层行情资源。"""
+    async def initialize(self) -> None:
+        """应用启动时检查持久化连接和数据库结构版本。"""
 
-        await self._market_data.close()
+        await self._unit_of_work_factory.initialize()
+
+    async def close(self) -> None:
+        """释放 Dashboard Service 所拥有的行情和持久化资源。"""
+
+        try:
+            await self._market_data.close()
+        finally:
+            await self._unit_of_work_factory.close()
 
     async def _read_required_manual_prices(
         self,
         holdings: tuple[Holding, ...],
+        repository: ManualPriceRepository,
     ) -> dict[str, ManualPriceRecord]:
         """读取并校验全部必要手工价格；任一缺失或过期都拒绝残缺快照。"""
 
@@ -289,7 +298,7 @@ class PortfolioDashboardService:
                 continue
             if now is None:
                 now = self._current_time()
-            record = await self._manual_price_repository.get_price(holding.symbol)
+            record = await repository.get_price(holding.symbol)
             if record is None:
                 raise ManualPriceNotFoundError(f"资产 {holding.symbol} 尚未录入手工卖出价")
             self._validate_manual_price_age(record, now)

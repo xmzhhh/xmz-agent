@@ -13,8 +13,10 @@ const JD_GOLD_SYMBOL = "JD-ZS-GOLD";
 const state = {
     assets: [],
     holdings: [],
+    transactions: [],
     dashboard: null,
     editingSymbol: null,
+    pendingSell: null,
     messageTimer: null,
 };
 
@@ -38,6 +40,29 @@ const elements = {
     manualPriceTime: document.querySelector("#manual-price-time"),
     positionsBody: document.querySelector("#positions-body"),
     positionCount: document.querySelector("#position-count"),
+    openingForm: document.querySelector("#opening-form"),
+    openingSymbol: document.querySelector("#opening-symbol"),
+    openingAcquiredAt: document.querySelector("#opening-acquired-at"),
+    openingNote: document.querySelector("#opening-note"),
+    buyForm: document.querySelector("#buy-form"),
+    buySymbol: document.querySelector("#buy-symbol"),
+    buyQuantity: document.querySelector("#buy-quantity"),
+    buyUnitPrice: document.querySelector("#buy-unit-price"),
+    buyFeeAmount: document.querySelector("#buy-fee-amount"),
+    buyExitFeeRate: document.querySelector("#buy-exit-fee-rate"),
+    buyOccurredAt: document.querySelector("#buy-occurred-at"),
+    buyNote: document.querySelector("#buy-note"),
+    sellForm: document.querySelector("#sell-form"),
+    sellSymbol: document.querySelector("#sell-symbol"),
+    sellQuantity: document.querySelector("#sell-quantity"),
+    sellUnitPrice: document.querySelector("#sell-unit-price"),
+    sellFeeAmount: document.querySelector("#sell-fee-amount"),
+    sellOccurredAt: document.querySelector("#sell-occurred-at"),
+    sellNote: document.querySelector("#sell-note"),
+    sellPreview: document.querySelector("#sell-preview"),
+    confirmSellButton: document.querySelector("#confirm-sell-button"),
+    transactionsBody: document.querySelector("#transactions-body"),
+    transactionCount: document.querySelector("#transaction-count"),
 };
 
 
@@ -128,6 +153,31 @@ function formatDateTime(value) {
 }
 
 
+function toApiDateTime(value) {
+    /** 把 datetime-local 的本地墙上时间转换成带时区的 ISO 字符串。 */
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+        throw new Error("请选择有效的交易时间");
+    }
+    return date.toISOString();
+}
+
+
+function setDefaultDateTime(input) {
+    /** datetime-local 不接受时区后缀，因此先按浏览器本地时区生成默认值。 */
+    const now = new Date();
+    const localNow = new Date(now.getTime() - now.getTimezoneOffset() * 60_000);
+    input.value = localNow.toISOString().slice(0, 16);
+}
+
+
+function assetLabel(symbol) {
+    /** 从后端资产目录取得展示名称，找不到时退回代码本身。 */
+    const asset = state.assets.find((item) => item.symbol === symbol);
+    return asset ? `${asset.name}（${symbol}）` : symbol;
+}
+
+
 function setText(selector, value) {
     /** 使用 textContent 写入外部数据，避免把行情来源等文本当成 HTML 执行。 */
     const element = document.querySelector(selector);
@@ -205,14 +255,53 @@ function renderAssetOptions() {
 }
 
 
+function replaceSelectOptions(select, assets, emptyLabel) {
+    /** 在刷新数据后重建下拉框，同时尽量保留用户尚未提交的选择。 */
+    const previousValue = select.value;
+    const options = [new Option(emptyLabel, "")];
+    for (const asset of assets) {
+        options.push(new Option(assetLabel(asset.symbol), asset.symbol));
+    }
+    select.replaceChildren(...options);
+    if (assets.some((asset) => asset.symbol === previousValue)) {
+        select.value = previousValue;
+    }
+}
+
+
+function renderTransactionAssetOptions() {
+    /** 依据账本状态区分“待初始化”“可以买入”和“可以卖出”的资产。 */
+    const trackedSymbols = new Set(state.transactions.map((item) => item.symbol));
+    const holdableAssets = state.assets.filter((item) => item.is_holding_supported);
+    const openingAssets = state.holdings
+        .filter((holding) => !trackedSymbols.has(holding.symbol))
+        .map((holding) => ({symbol: holding.symbol}));
+    const sellableAssets = state.holdings
+        .filter((holding) => trackedSymbols.has(holding.symbol))
+        .map((holding) => ({symbol: holding.symbol}));
+
+    replaceSelectOptions(
+        elements.openingSymbol,
+        openingAssets,
+        openingAssets.length ? "请选择已有持仓" : "暂无可初始化持仓",
+    );
+    replaceSelectOptions(elements.buySymbol, holdableAssets, "请选择资产");
+    replaceSelectOptions(
+        elements.sellSymbol,
+        sellableAssets,
+        sellableAssets.length ? "请选择账本持仓" : "暂无可卖持仓",
+    );
+}
+
+
 function resetHoldingForm() {
     /** 从编辑模式恢复为新增模式。 */
     state.editingSymbol = null;
     elements.holdingForm.reset();
     elements.holdingFeeRate.value = "0";
     elements.holdingSymbol.disabled = false;
-    elements.holdingFormTitle.textContent = "新增持仓";
-    elements.holdingSubmitButton.textContent = "新增持仓";
+    elements.holdingFormTitle.textContent = "录入持仓快照";
+    elements.holdingSubmitButton.textContent = "录入持仓快照";
     elements.cancelEditButton.hidden = true;
 }
 
@@ -252,8 +341,17 @@ function appendValueCell(row, primary, secondary = "", className = "") {
 
 
 function buildActionCell(holding) {
-    /** 为持仓绑定编辑和删除动作，事件闭包保留当前持仓对象。 */
+    /** 账本接管后的持仓禁止快照编辑；未接管持仓仍可修正或删除。 */
     const cell = document.createElement("td");
+    const isLedgerManaged = state.transactions.some((item) => item.symbol === holding.symbol);
+    if (isLedgerManaged) {
+        const badge = document.createElement("span");
+        badge.className = "ledger-managed";
+        badge.textContent = "账本管理";
+        cell.append(badge);
+        return cell;
+    }
+
     const wrapper = document.createElement("div");
     wrapper.className = "table-actions";
 
@@ -490,6 +588,211 @@ function renderManualPrice(record) {
 }
 
 
+function clearSellPreview() {
+    /** 任何输入变化都会让旧试算失效，避免确认已经过期的参数。 */
+    state.pendingSell = null;
+    elements.sellPreview.hidden = true;
+    elements.confirmSellButton.disabled = false;
+}
+
+
+function renderTransactions(realizedSummary) {
+    /** 展示后端保存的不可变流水；排序、金额和已实现收益都来自 API。 */
+    const typeLabels = {opening: "期初", buy: "买入", sell: "卖出", adjustment: "调整"};
+    elements.transactionsBody.replaceChildren();
+    elements.transactionCount.textContent = `${state.transactions.length} 笔流水`;
+
+    const realized = setText(
+        "#realized-pnl",
+        formatMoney(realizedSummary.realized_pnl, realizedSummary.currency),
+    );
+    setSignClass(realized, realizedSummary.realized_pnl);
+
+    if (state.transactions.length === 0) {
+        const row = document.createElement("tr");
+        row.className = "empty-row";
+        const cell = document.createElement("td");
+        cell.colSpan = 7;
+        cell.textContent = "尚无交易记录。已有持仓可先建立期初批次，也可以直接记录首次买入。";
+        row.append(cell);
+        elements.transactionsBody.append(row);
+        return;
+    }
+
+    for (const transaction of [...state.transactions].reverse()) {
+        const row = document.createElement("tr");
+        appendValueCell(row, formatDateTime(transaction.occurred_at), `记账 ${formatDateTime(transaction.created_at)}`);
+        appendValueCell(
+            row,
+            typeLabels[transaction.transaction_type] || transaction.transaction_type,
+            assetLabel(transaction.symbol),
+        );
+        appendValueCell(
+            row,
+            formatNumber(transaction.quantity, 8),
+            `单价 ${formatMoney(transaction.unit_price, transaction.currency)}`,
+        );
+        appendValueCell(
+            row,
+            formatMoney(transaction.gross_amount, transaction.currency),
+            `费用 ${formatMoney(transaction.fee_amount, transaction.currency)}`,
+        );
+        appendValueCell(row, formatMoney(transaction.cash_amount, transaction.currency));
+        const pnl = appendValueCell(
+            row,
+            transaction.realized_pnl === null
+                ? "—"
+                : formatMoney(transaction.realized_pnl, transaction.currency),
+        );
+        setSignClass(pnl, transaction.realized_pnl);
+        appendValueCell(row, transaction.note || "—");
+        elements.transactionsBody.append(row);
+    }
+}
+
+
+function openingPayload() {
+    /** 组装期初请求；持仓数量和成本由服务端读取，页面不能偷偷覆盖。 */
+    return {
+        symbol: elements.openingSymbol.value,
+        acquired_at: toApiDateTime(elements.openingAcquiredAt.value),
+        note: elements.openingNote.value.trim() || null,
+    };
+}
+
+
+function buyPayload() {
+    /** 保留十进制输入字符串，避免浏览器浮点数破坏金额精度。 */
+    return {
+        symbol: elements.buySymbol.value,
+        quantity: elements.buyQuantity.value.trim(),
+        unit_price: elements.buyUnitPrice.value.trim(),
+        fee_amount: elements.buyFeeAmount.value.trim(),
+        occurred_at: toApiDateTime(elements.buyOccurredAt.value),
+        estimated_exit_fee_percent: elements.buyExitFeeRate.value.trim(),
+        note: elements.buyNote.value.trim() || null,
+    };
+}
+
+
+function sellPayload() {
+    /** 卖出试算与最终确认复用完全相同的请求字段。 */
+    return {
+        symbol: elements.sellSymbol.value,
+        quantity: elements.sellQuantity.value.trim(),
+        unit_price: elements.sellUnitPrice.value.trim(),
+        fee_amount: elements.sellFeeAmount.value.trim(),
+        occurred_at: toApiDateTime(elements.sellOccurredAt.value),
+        note: elements.sellNote.value.trim() || null,
+    };
+}
+
+
+async function handleOpeningSubmit(event) {
+    /** 把旧快照转换为期初流水；该动作完成后旧 CRUD 会被后端锁定。 */
+    event.preventDefault();
+    const submitButton = elements.openingForm.querySelector("button[type='submit']");
+    submitButton.disabled = true;
+    try {
+        const payload = openingPayload();
+        await apiRequest("/transactions/opening", {
+            method: "POST",
+            body: JSON.stringify(payload),
+        });
+        elements.openingForm.reset();
+        setDefaultDateTime(elements.openingAcquiredAt);
+        showMessage(`持仓 ${payload.symbol} 已建立期初批次。`);
+        await refreshDashboardData();
+    } catch (error) {
+        showMessage(describeError(error), "error", true);
+    } finally {
+        submitButton.disabled = false;
+    }
+}
+
+
+async function handleBuySubmit(event) {
+    /** 买入会原子写入流水、FIFO 批次和最新持仓。 */
+    event.preventDefault();
+    const submitButton = elements.buyForm.querySelector("button[type='submit']");
+    submitButton.disabled = true;
+    try {
+        const payload = buyPayload();
+        await apiRequest("/transactions/buy", {
+            method: "POST",
+            body: JSON.stringify(payload),
+        });
+        elements.buyForm.reset();
+        elements.buyFeeAmount.value = "0";
+        elements.buyExitFeeRate.value = "0";
+        setDefaultDateTime(elements.buyOccurredAt);
+        showMessage(`买入 ${payload.symbol} 已写入模拟账本。`);
+        await refreshDashboardData();
+    } catch (error) {
+        showMessage(describeError(error), "error", true);
+    } finally {
+        submitButton.disabled = false;
+    }
+}
+
+
+async function handleSellPreview(event) {
+    /** 卖出表单只做只读试算，不在用户确认前修改持仓或批次。 */
+    event.preventDefault();
+    const submitButton = elements.sellForm.querySelector("button[type='submit']");
+    submitButton.disabled = true;
+    clearSellPreview();
+    try {
+        const payload = sellPayload();
+        const preview = await apiRequest("/transactions/sell-preview", {
+            method: "POST",
+            body: JSON.stringify(payload),
+        });
+        state.pendingSell = payload;
+        setText("#preview-gross", formatMoney(preview.gross_amount));
+        setText("#preview-cash", formatMoney(preview.estimated_cash_amount));
+        setText("#preview-cost", formatMoney(preview.fifo_cost_basis));
+        const pnl = setText("#preview-pnl", formatMoney(preview.estimated_realized_pnl));
+        setSignClass(pnl, preview.estimated_realized_pnl);
+        setText("#preview-remaining", formatNumber(preview.remaining_quantity, 8));
+        elements.sellPreview.hidden = false;
+        showMessage("卖出试算已完成，请核对后再确认记账。");
+    } catch (error) {
+        showMessage(describeError(error), "error", true);
+    } finally {
+        submitButton.disabled = false;
+    }
+}
+
+
+async function confirmSell() {
+    /** 只有用户点击试算结果中的确认按钮才落账；服务端还会按最新批次重算。 */
+    if (!state.pendingSell) {
+        showMessage("卖出参数已经变化，请重新试算。", "error", true);
+        return;
+    }
+    const payload = state.pendingSell;
+
+    elements.confirmSellButton.disabled = true;
+    try {
+        await apiRequest("/transactions/sell", {
+            method: "POST",
+            body: JSON.stringify(payload),
+        });
+        elements.sellForm.reset();
+        elements.sellFeeAmount.value = "0";
+        setDefaultDateTime(elements.sellOccurredAt);
+        clearSellPreview();
+        showMessage(`卖出 ${payload.symbol} 已写入模拟账本。`);
+        await refreshDashboardData();
+    } catch (error) {
+        showMessage(describeError(error), "error", true);
+    } finally {
+        elements.confirmSellButton.disabled = false;
+    }
+}
+
+
 async function loadManualPrice() {
     /** 手工价格不存在是正常初始状态，不显示成系统故障。 */
     try {
@@ -506,9 +809,17 @@ async function loadManualPrice() {
 
 
 async function refreshDashboardData({announce = false} = {}) {
-    /** 先刷新可编辑持仓，再尝试生成估值；必要价格缺失也不会让 CRUD 表格消失。 */
-    state.holdings = await apiRequest("/holdings");
+    /** 先同步持仓与账本，再生成估值；必要行情失败也不会隐藏可审计流水。 */
+    const [holdings, transactions, realizedSummary] = await Promise.all([
+        apiRequest("/holdings"),
+        apiRequest("/transactions"),
+        apiRequest("/transactions/realized-pnl"),
+    ]);
     await loadManualPrice();
+    state.holdings = holdings;
+    state.transactions = transactions;
+    renderTransactionAssetOptions();
+    renderTransactions(realizedSummary);
     try {
         state.dashboard = await apiRequest("/dashboard");
         renderDashboard();
@@ -647,7 +958,7 @@ async function refreshFromButton() {
 
 
 async function initialize() {
-    /** 页面启动时读取健康状态和资产目录，再载入当前进程内数据。 */
+    /** 页面启动时读取健康状态和资产目录，再载入 SQLite 中的持久化数据。 */
     try {
         const [health, assets] = await Promise.all([
             apiRequest("/health"),
@@ -655,6 +966,10 @@ async function initialize() {
         ]);
         state.assets = assets;
         renderAssetOptions();
+        renderTransactionAssetOptions();
+        setDefaultDateTime(elements.openingAcquiredAt);
+        setDefaultDateTime(elements.buyOccurredAt);
+        setDefaultDateTime(elements.sellOccurredAt);
         setConnectionStatus(health.market_data_mode, true);
         await refreshDashboardData();
     } catch (error) {
@@ -668,6 +983,11 @@ elements.holdingForm.addEventListener("submit", (event) => void handleHoldingSub
 elements.cancelEditButton.addEventListener("click", resetHoldingForm);
 elements.manualPriceForm.addEventListener("submit", (event) => void handleManualPriceSubmit(event));
 elements.deletePriceButton.addEventListener("click", () => void deleteManualPrice());
+elements.openingForm.addEventListener("submit", (event) => void handleOpeningSubmit(event));
+elements.buyForm.addEventListener("submit", (event) => void handleBuySubmit(event));
+elements.sellForm.addEventListener("submit", (event) => void handleSellPreview(event));
+elements.sellForm.addEventListener("input", clearSellPreview);
+elements.confirmSellButton.addEventListener("click", () => void confirmSell());
 elements.demoButton.addEventListener("click", () => void loadDemoPortfolio());
 elements.refreshButton.addEventListener("click", () => void refreshFromButton());
 

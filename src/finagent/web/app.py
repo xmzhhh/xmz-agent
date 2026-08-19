@@ -26,9 +26,30 @@ from finagent.dashboard import (
     PortfolioDashboardService,
 )
 from finagent.data import MarketDataError, MarketDataTimeoutError
+from finagent.ledger import (
+    BuyRequest,
+    BuyResult,
+    FutureTransactionError,
+    InsufficientHoldingError,
+    InvalidTradeFeeError,
+    LedgerAlreadyInitializedError,
+    LedgerManagedHoldingError,
+    LedgerStateConflictError,
+    LedgerTransaction,
+    NonChronologicalTransactionError,
+    OpeningPositionRequest,
+    OpeningPositionResult,
+    RealizedPnlSummary,
+    SellPreview,
+    SellRequest,
+    SellResult,
+    TransactionService,
+    UntrackedHoldingError,
+)
 from finagent.portfolio import (
     AssetDefinition,
     AssetNotHoldableError,
+    Currency,
     DemoPortfolioConflictError,
     DuplicateHoldingError,
     Holding,
@@ -38,7 +59,7 @@ from finagent.portfolio import (
     PortfolioError,
     UnsupportedAssetError,
 )
-from finagent.web.composition import build_dashboard_service
+from finagent.web.composition import build_application_services
 
 WEB_DIRECTORY = Path(__file__).resolve().parent
 TEMPLATES = Jinja2Templates(directory=WEB_DIRECTORY / "templates")
@@ -66,12 +87,24 @@ def _portfolio_error_status(error: PortfolioError) -> int:
             DemoPortfolioUnavailableError,
             ManualPriceNotFoundError,
             ManualPriceStaleError,
+            LedgerAlreadyInitializedError,
+            LedgerManagedHoldingError,
+            LedgerStateConflictError,
+            InsufficientHoldingError,
+            NonChronologicalTransactionError,
+            UntrackedHoldingError,
         ),
     ):
         return status.HTTP_409_CONFLICT
     if isinstance(
         error,
-        (UnsupportedAssetError, AssetNotHoldableError, ManualPriceNotSupportedError),
+        (
+            UnsupportedAssetError,
+            AssetNotHoldableError,
+            ManualPriceNotSupportedError,
+            InvalidTradeFeeError,
+            FutureTransactionError,
+        ),
     ):
         return status.HTTP_422_UNPROCESSABLE_CONTENT
     return status.HTTP_422_UNPROCESSABLE_CONTENT
@@ -80,17 +113,33 @@ def _portfolio_error_status(error: PortfolioError) -> int:
 def create_app(
     settings: Settings | None = None,
     dashboard_service: PortfolioDashboardService | None = None,
+    transaction_service: TransactionService | None = None,
 ) -> FastAPI:
-    """创建一个拥有独立内存状态和明确关闭生命周期的 FastAPI 应用。"""
+    """创建拥有显式存储初始化与关闭生命周期的 FastAPI 应用。"""
 
     active_settings = settings or get_settings()
-    service = dashboard_service or build_dashboard_service(active_settings)
+    active_transaction_service: TransactionService | None
+    if dashboard_service is None:
+        services = build_application_services(active_settings)
+        service = services.dashboard
+        active_transaction_service = services.transactions
+    else:
+        service = dashboard_service
+        active_transaction_service = transaction_service
+
+    def require_transaction_service() -> TransactionService:
+        """测试若只注入旧 Dashboard Service，访问交易端点时快速暴露装配错误。"""
+
+        if active_transaction_service is None:
+            raise RuntimeError("当前应用实例未装配 TransactionService")
+        return active_transaction_service
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-        """应用退出时沿 Service→Provider 链路释放外部资源。"""
+        """启动时检查存储，退出时沿 Service 链路释放数据库和 Provider。"""
 
         try:
+            await service.initialize()
             yield
         finally:
             await service.close()
@@ -101,6 +150,7 @@ def create_app(
         lifespan=lifespan,
     )
     app.state.dashboard_service = service
+    app.state.transaction_service = active_transaction_service
 
     # 静态目录和模板都位于 Python 包内部，安装 wheel 后仍能由同一应用入口提供。
     app.mount(
@@ -181,6 +231,8 @@ def create_app(
     async def create_holding(data: HoldingCreate) -> Holding:
         """创建一项由资产目录补全元数据的持仓。"""
 
+        if active_transaction_service is not None:
+            await active_transaction_service.ensure_snapshot_editable(data.symbol)
         return await service.create_holding(data)
 
     @router.get("/holdings/{symbol}", response_model=Holding)
@@ -193,12 +245,16 @@ def create_app(
     async def update_holding(symbol: str, data: HoldingUpdate) -> Holding:
         """完整替换持仓的三个可编辑数值字段。"""
 
+        if active_transaction_service is not None:
+            await active_transaction_service.ensure_snapshot_editable(symbol)
         return await service.update_holding(symbol, data)
 
     @router.delete("/holdings/{symbol}", response_model=Holding)
     async def delete_holding(symbol: str) -> Holding:
         """删除持仓，并由 Service 处理手工价格联动清理。"""
 
+        if active_transaction_service is not None:
+            await active_transaction_service.ensure_snapshot_editable(symbol)
         return await service.delete_holding(symbol)
 
     @router.get("/manual-prices/{symbol}", response_model=ManualPriceRecord)
@@ -234,6 +290,61 @@ def create_app(
         """仅在 Fake 模式和空状态下载入匿名演示组合。"""
 
         return await service.load_demo()
+
+    @router.post(
+        "/transactions/opening",
+        response_model=OpeningPositionResult,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def initialize_opening_position(
+        data: OpeningPositionRequest,
+    ) -> OpeningPositionResult:
+        """为旧持仓建立明确的期初流水和 FIFO 批次。"""
+
+        return await require_transaction_service().initialize_opening_position(data)
+
+    @router.post(
+        "/transactions/buy",
+        response_model=BuyResult,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def record_buy(data: BuyRequest) -> BuyResult:
+        """确认一笔买入或加仓，并原子更新账本与当前持仓。"""
+
+        return await require_transaction_service().record_buy(data)
+
+    @router.post("/transactions/sell-preview", response_model=SellPreview)
+    async def preview_sell(data: SellRequest) -> SellPreview:
+        """只读计算卖出到账、FIFO 成本和预计已实现收益。"""
+
+        return await require_transaction_service().preview_sell(data)
+
+    @router.post(
+        "/transactions/sell",
+        response_model=SellResult,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def record_sell(data: SellRequest) -> SellResult:
+        """用户确认试算后，重新校验当前状态并正式记录卖出。"""
+
+        return await require_transaction_service().record_sell(data)
+
+    @router.get("/transactions", response_model=list[LedgerTransaction])
+    async def list_transactions(symbol: str | None = None) -> tuple[LedgerTransaction, ...]:
+        """按时间查询全部或单项资产的不可变交易历史。"""
+
+        return await require_transaction_service().list_transactions(symbol)
+
+    @router.get("/transactions/realized-pnl", response_model=RealizedPnlSummary)
+    async def get_realized_pnl(symbol: str | None = None) -> RealizedPnlSummary:
+        """返回已确认卖出产生的已实现收益，不包含当前浮盈亏。"""
+
+        amount = await require_transaction_service().get_realized_pnl(symbol)
+        return RealizedPnlSummary(
+            symbol=symbol.strip().upper() if symbol is not None else None,
+            realized_pnl=amount,
+            currency=Currency.CNY,
+        )
 
     @router.get("/health")
     async def health() -> dict[str, str]:

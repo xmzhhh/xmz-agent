@@ -15,7 +15,7 @@ from pydantic import ValidationError
 from finagent.core.config import Settings
 from finagent.dashboard import DashboardSnapshot, ManualPriceRecord
 from finagent.portfolio import AssetDefinition, Holding
-from finagent.web import create_app
+from finagent.web import build_in_memory_dashboard_service, create_app
 
 EXPECTED_ASSET_SYMBOLS = ("017811", "JD-ZS-GOLD", "XAU-CNY-GRAM")
 EXPECTED_INITIAL_MARKET_VALUE = "2100.00"
@@ -61,7 +61,12 @@ async def check_portfolio_dashboard(app: FastAPI | None = None) -> bool:
     """
 
     settings = Settings.model_validate({"market_data_mode": "fake"})
-    active_app = app or create_app(settings)
+    # Phase 6 验收必须可重复运行且不写个人数据库，因此显式注入内存 Unit of Work；正式
+    # ``finagent dashboard`` 的组合根已经改用 SQLite。
+    active_app = app or create_app(
+        settings,
+        build_in_memory_dashboard_service(settings),
+    )
 
     print("=== Phase 6 模拟持仓与资产面板离线验收 ===")
     print("运行模式：Fake（固定匿名数据）")
