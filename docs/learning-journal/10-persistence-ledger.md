@@ -215,6 +215,20 @@ Dashboard Service 先在短事务中读出持仓快照，退出事务后再请�
 - 解决方法：只调整相关文件的导入顺序，不格式化或重构无关代码。
 - 学到的知识：测试、静态类型和风格检查覆盖不同风险，不能用其中一项通过代替其他质量门禁。
 
+### 11. 首次执行 Alembic 时无法打开默认数据库文件
+
+- 问题现象：在全新工作区执行 `uv run alembic upgrade head`，SQLite 报
+  `sqlite3.OperationalError: unable to open database file`。
+- 产生原因：默认数据库是 `data/private/finagent.db`。SQLite 可以自动创建 `finagent.db` 文件，
+  但不能创建尚不存在的 `data/private` 父目录；应用连接检查会创建目录，Alembic 在线迁移入口却
+  缺少同样的初始化步骤。
+- 排查思路：从堆栈底部的 SQLite 原始异常开始检查，核对 `DATABASE_PATH` 解析结果、目标文件的
+  父目录是否存在，以及异常发生在建表前还是迁移脚本内部。
+- 解决方法：Alembic 在线模式在创建 Engine 前递归创建数据库父目录；离线 SQL 生成模式保持无
+  文件系统副作用。新增“多层父目录不存在”的迁移回归测试。
+- 学到的知识：数据库驱动能创建文件不代表能创建目录；应用启动入口和迁移入口都必须覆盖全新
+  环境的基础设施前置条件。
+
 ## 待继续
 
 - 实现交易流水与买入批次 Repository。
@@ -223,7 +237,7 @@ Dashboard Service 先在短事务中读出持仓快照，退出事务后再请�
 
 ## 当前验证结果
 
-- `uv run python -m pytest -q`：252 个测试通过。
+- `uv run python -m pytest -q`：253 个测试通过。
 - `uv run ruff check .`：通过。
 - `uv run mypy`：85 个源文件通过严格类型检查。
 - Alembic 集成测试：空数据库升级到 `20260817_01`、`check`、降级到 base、再次升级均通过。

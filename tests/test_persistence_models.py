@@ -115,6 +115,25 @@ def test_initial_migration_can_upgrade_downgrade_and_upgrade_again(
     assert BUSINESS_TABLES.issubset(_read_table_names(database_path))
 
 
+def test_migration_creates_missing_database_parent_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """首次安装时即使 data/private 一类父目录不存在，迁移也必须能创建数据库。
+
+    该测试防止 Alembic 在全新项目中直接连接 SQLite，最终只返回难以理解的
+    ``unable to open database file``。
+    """
+
+    database_path = tmp_path / "nested" / "private" / "finagent.db"
+    assert not database_path.parent.exists()
+
+    command.upgrade(_alembic_config(database_path, monkeypatch), "head")
+
+    assert database_path.is_file()
+    assert BUSINESS_TABLES.issubset(_read_table_names(database_path))
+
+
 async def test_orm_rows_round_trip_decimal_and_utc_time(
     migrated_database_path: Path,
 ) -> None:

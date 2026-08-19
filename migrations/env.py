@@ -44,14 +44,24 @@ def _render_migration_item(
     return False
 
 
-def _database_url() -> str:
-    """从类型安全配置构造 Alembic 使用的 URL 字符串。"""
+def _database_url(*, create_parent: bool = False) -> str:
+    """从类型安全配置构造 Alembic 使用的 URL 字符串。
+
+    Args:
+        create_parent: 在线迁移连接 SQLite 前，是否创建数据库文件的父目录。离线生成 SQL
+            不应改动文件系统，因此默认关闭。
+    """
 
     from finagent.persistence.database import build_sqlite_url
 
     # 迁移命令是一次性进程，不使用应用级 lru_cache。这样同一测试进程切换临时数据库时，
     # 每次 Alembic 调用都会重新读取 DATABASE_PATH，不会误连接用户的真实数据库。
-    return build_sqlite_url(Settings().database_path).render_as_string(
+    database_path = Settings().database_path
+    if create_parent:
+        # SQLite 能创建数据库文件，却不能创建缺失的父目录。默认路径首次使用时
+        # data/private 尚不存在，因此必须在建立连接之前显式创建。
+        database_path.parent.mkdir(parents=True, exist_ok=True)
+    return build_sqlite_url(database_path).render_as_string(
         hide_password=False
     )
 
@@ -91,7 +101,7 @@ async def _run_migrations_online() -> None:
     """建立异步连接，并把实际迁移委托给同步 Alembic 上下文。"""
 
     section = config.get_section(config.config_ini_section, {})
-    section["sqlalchemy.url"] = _database_url()
+    section["sqlalchemy.url"] = _database_url(create_parent=True)
     connectable = async_engine_from_config(
         section,
         prefix="sqlalchemy.",
