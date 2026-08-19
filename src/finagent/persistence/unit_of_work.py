@@ -7,7 +7,12 @@ from typing import Self
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from finagent.dashboard.manual_prices import ManualPriceRepository
+from finagent.ledger.repository import LedgerTransactionRepository, PurchaseLotRepository
 from finagent.persistence.database import DatabaseManager
+from finagent.persistence.ledger_repositories import (
+    SqlAlchemyLedgerTransactionRepository,
+    SqlAlchemyPurchaseLotRepository,
+)
 from finagent.persistence.repositories import (
     SqlAlchemyHoldingRepository,
     SqlAlchemyManualPriceRepository,
@@ -19,7 +24,7 @@ CURRENT_SCHEMA_REVISION = "20260817_01"
 
 
 class SqlAlchemyDashboardUnitOfWork:
-    """让两个 Repository 共享同一 Session、提交点和回滚边界。"""
+    """让持仓、价格、流水和批次 Repository 共享同一事务边界。"""
 
     def __init__(
         self,
@@ -33,6 +38,8 @@ class SqlAlchemyDashboardUnitOfWork:
         self._session: AsyncSession | None = None
         self._holdings: SqlAlchemyHoldingRepository | None = None
         self._manual_prices: SqlAlchemyManualPriceRepository | None = None
+        self._transactions: SqlAlchemyLedgerTransactionRepository | None = None
+        self._purchase_lots: SqlAlchemyPurchaseLotRepository | None = None
         self._committed = False
 
     @property
@@ -51,14 +58,32 @@ class SqlAlchemyDashboardUnitOfWork:
             raise RuntimeError("Unit of Work 尚未进入，不能访问手工价格仓库")
         return self._manual_prices
 
+    @property
+    def transactions(self) -> LedgerTransactionRepository:
+        """返回绑定到当前 Session 的交易流水仓库。"""
+
+        if self._transactions is None:
+            raise RuntimeError("Unit of Work 尚未进入，不能访问交易流水仓库")
+        return self._transactions
+
+    @property
+    def purchase_lots(self) -> PurchaseLotRepository:
+        """返回绑定到当前 Session 的买入批次仓库。"""
+
+        if self._purchase_lots is None:
+            raise RuntimeError("Unit of Work 尚未进入，不能访问买入批次仓库")
+        return self._purchase_lots
+
     async def __aenter__(self) -> Self:
-        """串行进入本机状态事务，并为两个 Repository 创建同一 Session。"""
+        """串行进入本机状态事务，并为全部 Repository 创建同一 Session。"""
 
         await self._lock.acquire()
         try:
             self._session = self._database_manager.create_session()
             self._holdings = SqlAlchemyHoldingRepository(self._session, self._catalog)
             self._manual_prices = SqlAlchemyManualPriceRepository(self._session)
+            self._transactions = SqlAlchemyLedgerTransactionRepository(self._session)
+            self._purchase_lots = SqlAlchemyPurchaseLotRepository(self._session)
             self._committed = False
             return self
         except BaseException:
@@ -84,6 +109,8 @@ class SqlAlchemyDashboardUnitOfWork:
                 self._session = None
                 self._holdings = None
                 self._manual_prices = None
+                self._transactions = None
+                self._purchase_lots = None
                 self._lock.release()
 
     async def commit(self) -> None:

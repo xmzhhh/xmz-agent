@@ -7,6 +7,10 @@
 
 from finagent.persistence.database import Base, DatabaseManager, build_sqlite_url
 from finagent.persistence.errors import DatabaseSchemaError, PersistenceError
+from finagent.persistence.ledger_repositories import (
+    SqlAlchemyLedgerTransactionRepository,
+    SqlAlchemyPurchaseLotRepository,
+)
 from finagent.persistence.models import (
     HoldingRow,
     LedgerTransactionRow,
@@ -24,6 +28,8 @@ __all__ = [
     "ManualPriceRow",
     "PurchaseLotRow",
     "PersistenceError",
+    "SqlAlchemyLedgerTransactionRepository",
+    "SqlAlchemyPurchaseLotRepository",
     "UTCDateTime",
     "build_sqlite_url",
 ]
