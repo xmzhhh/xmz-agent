@@ -198,3 +198,11 @@ class SellResult(FinancialModel):
     transaction: LedgerTransaction
     preview: SellPreview
     holding: Holding | None
+
+
+class RealizedPnlSummary(FinancialModel):
+    """按全部资产或单项资产汇总的已实现收益。"""
+
+    symbol: str | None
+    realized_pnl: DecimalInput
+    currency: Currency

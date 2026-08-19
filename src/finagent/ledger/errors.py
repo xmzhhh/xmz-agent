@@ -23,6 +23,10 @@ class LedgerStateConflictError(LedgerError):
     """持仓数量与未卖完批次数量不一致，拒绝继续扩大错误。"""
 
 
+class LedgerManagedHoldingError(LedgerError):
+    """持仓已有交易历史，不能再通过快照 CRUD 绕过账本修改。"""
+
+
 class InsufficientHoldingError(LedgerError):
     """卖出数量超过当前可用持仓。"""
 

@@ -200,11 +200,17 @@ flowchart TD
     CLI["finagent dashboard"] --> Server["Uvicorn"]
     Server --> API
     API --> Dashboard["PortfolioDashboardService"]
+    API --> Transactions["TransactionService"]
     Dashboard --> UOW["DashboardUnitOfWork"]
+    Transactions --> UOW
     UOW --> Holdings["SqlAlchemyHoldingRepository"]
     UOW --> ManualPrices["SqlAlchemyManualPriceRepository"]
+    UOW --> Ledger["SqlAlchemyLedgerTransactionRepository"]
+    UOW --> Lots["SqlAlchemyPurchaseLotRepository"]
     Holdings --> SQLite["SQLite finagent.db"]
     ManualPrices --> SQLite
+    Ledger --> SQLite
+    Lots --> SQLite
     Dashboard --> Market["MarketDataService"]
     Market --> Provider["Fake Provider 或 Real Router"]
     Dashboard --> Calculator["PortfolioCalculator"]
@@ -221,10 +227,11 @@ flowchart TD
   编排持仓状态、事务边界、必要行情、可选黄金参考价和计算器。
 - `persistence/`：实现 SQLAlchemy ORM、SQLite Repository 和 Unit of Work；同一次业务写入共享
   一个 AsyncSession，只有全部成功才提交。
-- `web/api.py`：只负责请求校验、调用 Service、Decimal 字符串序列化和 HTTP 错误映射；不实现
+- `web/app.py`：只负责请求校验、调用 Service、Decimal 字符串序列化和 HTTP 错误映射；不实现
   金融公式。
 - `web/composition.py`：作为组合根，根据 `MARKET_DATA_MODE` 装配 Fake 或 Real Provider；正式
-  应用装配 SQLite Unit of Work，测试与离线验收显式装配内存 Unit of Work。
+  应用让 Dashboard Service 和 TransactionService 共享同一个 SQLite Unit of Work 工厂，测试与
+  离线验收仍可显式装配内存实现。
 - `web/templates/` 与 `web/static/`：作为 API 客户端展示结果，不在 JavaScript 中重复收益公式。
 - `cli.py`：把 `finagent dashboard` 参数交给 Uvicorn；默认仅监听 `127.0.0.1`，开放局域网时提示
   无认证风险。
@@ -272,7 +279,7 @@ Repository 与 Unit of Work 抽象解决的问题。
 | 场景 | HTTP 状态码 |
 |---|---:|
 | 不支持的资产、非法参数 | 422 |
-| 重复持仓、演示冲突、手工价缺失或过期 | 409 |
+| 重复持仓、演示冲突、手工价缺失或过期、账本状态冲突 | 409 |
 | 持仓不存在 | 404 |
 | 必要行情超时 | 504 |
 | 其他必要行情不可用 | 503 |
@@ -314,3 +321,25 @@ FIFO 结果，留待后续专门的账本重建能力处理。
 
 交易写入共享同一个 AsyncSession。流水、批次和持仓任何一步失败，整个 Unit of Work 回滚；
 清仓时持仓被删除，但历史流水和已归零批次继续保留用于审计。
+
+### 10.3 FastAPI 与网页交易流程
+
+交易账本通过同一 `/api/v1` 暴露，不让浏览器直接访问 Repository：
+
+| API | 用途 | 是否写数据库 |
+|---|---|---|
+| `POST /transactions/opening` | 把已有持仓快照登记为期初 FIFO 批次 | 是 |
+| `POST /transactions/buy` | 记录买入，追加流水和批次并更新持仓投影 | 是 |
+| `POST /transactions/sell-preview` | 根据当前批次计算到账、成本和预计已实现收益 | 否 |
+| `POST /transactions/sell` | 用户确认后重新校验并正式卖出 | 是 |
+| `GET /transactions` | 查询按发生时间排序的不可变流水 | 否 |
+| `GET /transactions/realized-pnl` | 汇总已确认卖出的已实现收益 | 否 |
+
+网页中的卖出表单不能直接调用确认接口。它先保存原始十进制字符串请求并展示后端试算；用户修改
+任何字段都会清除试算，只有点击试算结果中的“确认并写入卖出流水”才提交同一份请求。服务端不会
+信任旧试算结果，而是依据数据库最新批次重新计算，因此即使两个页面同时操作，也不会用过期批次
+静默落账。
+
+持仓快照 CRUD 仅用于录入尚未建立账本的历史起点。一旦某个代码已经存在流水，API 会抛出
+`LedgerManagedHoldingError` 并返回 409，网页把操作栏改为“账本管理”。这个限制防止用户绕过
+交易流水直接改数量，造成当前持仓、FIFO 批次和审计历史互相矛盾。

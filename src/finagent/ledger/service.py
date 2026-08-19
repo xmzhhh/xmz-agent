@@ -14,6 +14,7 @@ from finagent.ledger.errors import (
     InsufficientHoldingError,
     InvalidTradeFeeError,
     LedgerAlreadyInitializedError,
+    LedgerManagedHoldingError,
     LedgerStateConflictError,
     NonChronologicalTransactionError,
     TradeAmountTooSmallError,
@@ -314,6 +315,17 @@ class TransactionService:
             self._catalog.require_holding_asset(symbol)
         async with self._unit_of_work_factory() as unit_of_work:
             return await unit_of_work.transactions.list_transactions(symbol)
+
+    async def ensure_snapshot_editable(self, symbol: str) -> None:
+        """阻止已有账本历史的资产继续通过旧持仓 CRUD 绕过流水修改。"""
+
+        asset = self._catalog.require_holding_asset(symbol)
+        async with self._unit_of_work_factory() as unit_of_work:
+            latest = await unit_of_work.transactions.latest_occurred_at(asset.symbol)
+        if latest is not None:
+            raise LedgerManagedHoldingError(
+                f"资产 {asset.symbol} 已由交易账本管理，请使用加仓或卖出功能"
+            )
 
     async def get_realized_pnl(self, symbol: str | None = None) -> Decimal:
         """汇总已确认 SELL 流水的已实现收益，不把持仓浮盈亏混入其中。"""

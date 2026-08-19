@@ -115,6 +115,10 @@ async def test_dashboard_page_and_static_assets_are_served() -> None:
     assert "<title>FinAgent 资产面板</title>" in page.text
     assert 'data-market-mode="fake"' in page.text
     assert 'id="holding-form"' in page.text
+    assert 'id="opening-form"' in page.text
+    assert 'id="buy-form"' in page.text
+    assert 'id="sell-form"' in page.text
+    assert 'id="transactions-body"' in page.text
     assert 'id="positions-body"' in page.text
     assert "/static/dashboard.css" in page.text
     assert "/static/dashboard.js" in page.text
@@ -127,6 +131,7 @@ async def test_dashboard_page_and_static_assets_are_served() -> None:
     assert "javascript" in script.headers["content-type"]
     assert 'const API_BASE = "/api/v1"' in script.text
     assert 'apiRequest("/dashboard")' in script.text
+    assert 'apiRequest("/transactions/sell-preview"' in script.text
     # 外部行情来源通过 textContent 写入，防止把 Provider 文本作为 HTML 执行。
     assert ".innerHTML" not in script.text
 
