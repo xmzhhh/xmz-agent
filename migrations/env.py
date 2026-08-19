@@ -7,13 +7,15 @@ PyCharm、Dashboard 和迁移命令使用同一个本机文件。
 
 from asyncio import run
 from logging.config import fileConfig
+from typing import Any
 
 from alembic import context
 from sqlalchemy import Connection, pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-from finagent.core.config import get_settings
-from finagent.persistence.database import Base, install_sqlite_connection_settings
+from finagent.core.config import Settings
+from finagent.persistence import Base, UTCDateTime
+from finagent.persistence.database import install_sqlite_connection_settings
 
 config = context.config
 
@@ -25,12 +27,31 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 
+def _render_migration_item(
+    item_type: str,
+    item: Any,
+    _autogenerate_context: Any,
+) -> str | bool:
+    """让自定义 UTC 类型在迁移中保存为稳定的数据库物理类型。
+
+    ``UTCDateTime`` 的时区转换属于应用读写逻辑，SQLite 中真正创建的仍是 ``DATETIME``。
+    历史迁移不应依赖以后可能移动或重命名的应用类，因此自动生成时写成 SQLAlchemy 标准
+    类型。返回 ``False`` 表示其他对象继续使用 Alembic 默认渲染方式。
+    """
+
+    if item_type == "type" and isinstance(item, UTCDateTime):
+        return "sa.DateTime()"
+    return False
+
+
 def _database_url() -> str:
     """从类型安全配置构造 Alembic 使用的 URL 字符串。"""
 
     from finagent.persistence.database import build_sqlite_url
 
-    return build_sqlite_url(get_settings().database_path).render_as_string(
+    # 迁移命令是一次性进程，不使用应用级 lru_cache。这样同一测试进程切换临时数据库时，
+    # 每次 Alembic 调用都会重新读取 DATABASE_PATH，不会误连接用户的真实数据库。
+    return build_sqlite_url(Settings().database_path).render_as_string(
         hide_password=False
     )
 
@@ -44,6 +65,7 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
+        render_item=_render_migration_item,
     )
 
     with context.begin_transaction():
@@ -58,6 +80,7 @@ def _run_migrations(connection: Connection) -> None:
         target_metadata=target_metadata,
         compare_type=True,
         render_as_batch=True,
+        render_item=_render_migration_item,
     )
 
     with context.begin_transaction():

@@ -6,5 +6,21 @@
 """
 
 from finagent.persistence.database import Base, DatabaseManager, build_sqlite_url
+from finagent.persistence.models import (
+    HoldingRow,
+    LedgerTransactionRow,
+    ManualPriceRow,
+    PurchaseLotRow,
+    UTCDateTime,
+)
 
-__all__ = ["Base", "DatabaseManager", "build_sqlite_url"]
+__all__ = [
+    "Base",
+    "DatabaseManager",
+    "HoldingRow",
+    "LedgerTransactionRow",
+    "ManualPriceRow",
+    "PurchaseLotRow",
+    "UTCDateTime",
+    "build_sqlite_url",
+]
