@@ -360,16 +360,64 @@ POST /api/v1/transactions/sell（正式写入）
 - 学到的知识：提交失败不会自动清空暂存区。Windows 自动化环境遇到复杂引号或中文说明时，
   `--body-file`、`--file` 一类文件参数通常比多层命令行转义更稳定。
 
+## 第六小阶段：临时数据库端到端验收
+
+### 本小阶段完成内容
+
+- 新增 `scripts/step08_check_persistence_ledger.py`，供 PyCharm 直接运行。
+- 脚本在系统临时目录创建一次性 SQLite 文件，并执行正式 Alembic 迁移，不使用简化建表方式。
+- 先后启动三份 FastAPI 应用连接同一个文件，验证“写入 → 重启读取 → 卖出 → 再次重启读取”。
+- 验证卖出试算只读、确认卖出才写库，并核对 FIFO 成本、剩余平均成本和已实现收益。
+- 脚本固定使用 Fake 行情，不读取 `.env`，结束后关闭 Engine 并自动删除临时数据库。
+- 新增脚本成功、迁移失败和同步 `main` 入口测试，并补充独立 Phase 7 验收手册。
+
+### 为什么必须重新创建应用才能证明持久化
+
+在同一个 Service 对象中“写完再读”只能证明 Repository 当前能返回数据，无法排除数据仍来自
+进程内对象或 SQLAlchemy Session 缓存。Step 08 每次重启都重新创建 FastAPI、DatabaseManager、
+Engine 和 Session 工厂；只有新应用仍能恢复持仓和流水，才能证明数据真正写进了 SQLite 文件。
+
+Alembic 的异步迁移入口内部会调用 `asyncio.run()`。验收主函数已经运行在事件循环中，因此迁移
+通过 `asyncio.to_thread()` 放到独立线程执行，避免在同一个线程嵌套事件循环。迁移完成后才启动
+FastAPI，符合真实部署中“先升级结构，再启动应用”的顺序。
+
+### 17. 定向 mypy 命令把 src-layout 项目识别成未标记的安装包
+
+- 问题现象：执行 `uv run mypy scripts/step08_check_persistence_ledger.py ...` 时，mypy 报告
+  `finagent` 已安装但缺少 `py.typed`，没有按项目源码解析导入。
+- 产生原因：显式传入少量 `scripts/` 和 `tests/` 文件改变了本项目 `src` 布局的模块发现上下文；
+  mypy 把虚拟环境中的 editable 安装视为第三方包。项目配置原本要求一起检查 `src`、`tests` 和
+  `scripts`。
+- 排查思路：对比定向命令与无参数 `uv run mypy` 的模块解析结果，区分“代码类型错误”和“检查
+  入口改变造成的导入错误”。
+- 解决方法：按 `pyproject.toml` 使用无参数 `uv run mypy` 完整检查。完整检查随后暴露了真正的
+  `Holding | None` 收窄问题，再通过显式 `if sell.holding is None` 分支修复。
+- 学到的知识：静态检查命令本身也是项目配置的一部分；随意缩小文件参数可能改变 src-layout 的
+  导入语义，不能把这种工具入口差异误认为业务模块缺少类型。
+
+### 18. Windows CMD 显示脚本中文输出为乱码
+
+- 问题现象：自动化终端通过 Windows CMD 运行 Step 08 时，中文标题和说明显示为乱码，但数字、
+  pytest 断言和退出码都正确。
+- 产生原因：脚本文件和 Python 字符串是 UTF-8，当前 CMD 输出代码页却不是 UTF-8；这是终端显示
+  编码不一致，不是数据库或字符串内容损坏。
+- 排查思路：让 pytest 通过 `capsys` 捕获同一函数输出，确认 Unicode 文本断言全部成功，再对比
+  PyCharm 的 UTF-8 控制台。
+- 解决方法：项目代码运行继续使用 PyCharm；若必须在 CMD 中人工运行，可先执行 `chcp 65001`。
+  不为适配单个终端代码页而修改脚本中的中文内容。
+- 学到的知识：乱码要区分文件编码、Python 内部字符串和终端代码页三个层次；测试捕获正确而
+  终端显示错误时，应修复显示环境而不是重写业务数据。
+
 ## 待继续
 
-- 增加 Phase 7 独立验收脚本和操作手册，覆盖服务重启、期初初始化、买入和卖出闭环。
+- 开发者在 PyCharm 运行 Step 08，确认本机输出和退出代码。
 - 完成本阶段全部文档与唯一 PR 后发布 `v0.3.0`。
 
 ## 当前验证结果
 
-- `uv run python -m pytest -q`：264 个测试通过。
+- `uv run python -m pytest -q`：267 个测试通过。
 - `uv run ruff check .`：通过。
-- `uv run mypy`：94 个源文件通过严格类型检查。
+- `uv run mypy`：96 个源文件通过严格类型检查。
 - Alembic 集成测试：空数据库升级到 `20260817_01`、`check`、降级到 base、再次升级均通过。
 - `uv build`：成功生成 `finagent-0.3.0` 的源码包和 wheel。
 - `git diff --check`：通过；Git 仅提示 Windows 工作区未来可能进行 LF/CRLF 转换。

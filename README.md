@@ -46,6 +46,7 @@ FinAgent 不只是一个“接上大模型的聊天页面”。最终版本会�
 - [模拟持仓管理与资产面板学习日记](docs/learning-journal/09-portfolio-dashboard.md)
 - [SQLite 持久化与交易账本学习日记](docs/learning-journal/10-persistence-ledger.md)
 - [Phase 6 验收手册](docs/PHASE6_ACCEPTANCE.md)
+- [Phase 7 验收手册](docs/PHASE7_ACCEPTANCE.md)
 
 ## 当前进度
 
@@ -147,6 +148,11 @@ uv run alembic upgrade head
 在 PyCharm 直接运行 `scripts/step07_check_portfolio_dashboard.py`，可以在不启动端口、不读取 `.env`
 且不消耗外部 API 额度的情况下，验证网页资源、匿名组合、组合估值和手工黄金价格更新。Real 模式
 和手机局域网验收步骤见 [Phase 6 验收手册](docs/PHASE6_ACCEPTANCE.md)。
+
+在 PyCharm 直接运行 `scripts/step08_check_persistence_ledger.py`，可以在系统临时目录中执行正式
+Alembic 迁移，并通过两次服务重启验证期初持仓、买入、卖出试算、确认卖出、交易流水和已实现
+收益确实保存到 SQLite。脚本结束后自动删除临时数据库，不读取个人数据库。运行配置和网页人工
+验收步骤见 [Phase 7 验收手册](docs/PHASE7_ACCEPTANCE.md)。
 
 ### 当前限制
 
