@@ -9,11 +9,21 @@ from finagent.memory.commands import (
     MemoryConfirmationResult,
     MemoryRejectionReason,
 )
+from finagent.memory.context import AgentContext, ContextAssembler
+from finagent.memory.conversation import (
+    ConversationService,
+    ConversationSummarizer,
+    ConversationWindow,
+    ModelConversationSummarizer,
+)
 from finagent.memory.errors import (
     ConversationArchivedError,
     ConversationConflictError,
+    ConversationHistoryError,
     ConversationMessageNotFoundError,
     ConversationNotFoundError,
+    ConversationSummaryConflictError,
+    ConversationSummaryError,
     InvalidMemoryTransitionError,
     MemoryAuditError,
     MemoryCandidateExpiredError,
@@ -41,14 +51,22 @@ from finagent.memory.service import MemoryService
 from finagent.memory.unit_of_work import MemoryUnitOfWork, MemoryUnitOfWorkFactory
 
 __all__ = [
+    "AgentContext",
     "ConversationMessage",
     "ConversationArchivedError",
     "ConversationConflictError",
+    "ConversationHistoryError",
     "ConversationMessageNotFoundError",
     "ConversationNotFoundError",
     "ConversationRepository",
+    "ConversationService",
     "ConversationSession",
     "ConversationStatus",
+    "ConversationSummarizer",
+    "ConversationSummaryConflictError",
+    "ConversationSummaryError",
+    "ConversationWindow",
+    "ContextAssembler",
     "InvalidMemoryTransitionError",
     "MemoryActor",
     "MemoryAuditError",
@@ -71,5 +89,6 @@ __all__ = [
     "MemoryType",
     "MemoryUnitOfWork",
     "MemoryUnitOfWorkFactory",
+    "ModelConversationSummarizer",
     "SensitiveMemoryError",
 ]

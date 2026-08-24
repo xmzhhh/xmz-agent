@@ -55,3 +55,15 @@ class MemoryClockError(MemoryDomainError):
 
 class MemoryAuditError(MemoryDomainError):
     """代码尝试把未列入白名单的字段写入记忆审计事件。"""
+
+
+class ConversationHistoryError(MemoryDomainError):
+    """持久化消息顺序无法组成合法 user/assistant/tool 对话轮次。"""
+
+
+class ConversationSummaryError(MemoryDomainError):
+    """摘要器返回空内容、工具调用或过长结果。"""
+
+
+class ConversationSummaryConflictError(MemoryDomainError):
+    """摘要生成期间已有另一操作推进了摘要覆盖位置。"""

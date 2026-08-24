@@ -393,5 +393,42 @@ MemoryUnitOfWork
 - 敏感过滤递归检查结构化字段名与明显凭据标签，错误消息不回显正文。审计事件只允许版本号、
   状态、原因代码、是否过期和关联 UUID 等白名单字段，不接收模型自由文本。
 
-下一小阶段将实现会话应用服务和上下文组装：恢复会话、选取近期消息、管理滚动摘要，并把 ACTIVE
-且未过期的长期记忆以清晰边界注入模型请求。
+### 11.1 会话窗口与滚动摘要
+
+`ConversationService` 把数据库中的原始消息划分为完整对话轮次：
+
+```text
+user
+  ├── assistant 最终回答
+  └── assistant tool_calls
+          ├── tool result 1
+          ├── tool result 2
+          └── assistant 最终回答
+```
+
+摘要只能覆盖最老的完整轮次，不能截断 assistant 工具请求和对应 tool 结果。近期消息数量是软上限；
+若一个完整工具轮次本身超过上限，系统会多保留整轮，而不是制造无法发送给模型的孤立 tool 消息。
+原始 `chat_messages` 永不因摘要而删除，`summary_until_sequence` 只负责防止摘要与近期窗口重复注入。
+
+滚动摘要通过 `ConversationSummarizer` 协议隔离。`ModelConversationSummarizer` 使用统一
+`ModelProvider`、temperature 0 和 `tool_choice=none`；自动测试使用 Fake Summarizer，不访问百炼。
+摘要模型调用发生在数据库事务之外，写回前比较旧摘要和覆盖序号；若另一任务已经推进摘要，则
+拒绝旧结果覆盖新状态。
+
+### 11.2 上下文组装顺序
+
+`ContextAssembler` 生成的模型消息顺序固定为：
+
+```text
+固定 system prompt
+  → 已确认长期记忆 system 数据块（可选）
+  → 当前会话滚动摘要 system 数据块（可选）
+  → summary_until_sequence 之后的原始 user/assistant/tool 消息
+```
+
+长期记忆数据块明确声明 value 是用户确认的数据而不是高优先级指令，并且不包含数据库 UUID、
+审计事件或候选记忆。未指定资产代码时只注入全局记忆；显式传入资产代码后才加入对应资产范围
+记忆。近期原始消息转换成基础 `Message` 后才交给 Provider，不暴露数据库 ID、序号和时间。
+
+下一小阶段将把持久化上下文接入 Agent 调用流程：一轮成功问答同时保存 user、assistant 和 tool
+消息，失败时不提交半截轮次，并为后续只读资产工具注册建立编排边界。
