@@ -451,3 +451,26 @@ ContextAssembler
 的 `session.updated_at`。如果其他进程已推进会话，旧上下文结果会以
 `ConversationConflictError` 失败，不会接到已经变化的历史之后。当前注册中心只允许无副作用的
 教学工具，下一小阶段再加入共享 Phase 7 SQLite 的只读资产查询工具。
+
+### 11.4 只读资产工具白名单
+
+持久化 Agent 通过独立的 `create_read_only_asset_tool_registry` 查询 Phase 7 已有事实，不直接访问
+SQLAlchemy，也不把 Dashboard 或 Transaction Service 的写方法动态暴露给模型：
+
+```text
+PersistentToolCallingAgent
+  → ToolRegistry（只含三个 get_* 工具）
+      ├── get_portfolio_snapshot
+      │     → PortfolioDashboardService → 行情 + PortfolioCalculator
+      ├── get_holding_record
+      │     → PortfolioDashboardService → HoldingRepository
+      └── get_transaction_ledger_summary
+            → TransactionService → LedgerTransactionRepository
+```
+
+组合工具返回当前估值、仓位和行情质量；持仓工具只返回 SQLite 中的数量、均价和费率；账本工具
+返回计数、现金流、费用、已实现收益以及最多 20 条最近流水。所有金融值使用十进制字符串。
+
+账本工具不会向模型发送交易 UUID、数据库创建时间或自由文本备注。工具注册中心不包含持仓 CRUD、
+买入、卖出试算、确认卖出或自动交易能力。自动测试在执行工具前后比较持仓与流水，确保查询没有
+改变 SQLite 状态；Real 模式下组合工具仍可能只读访问外部行情源。
