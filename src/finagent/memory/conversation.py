@@ -236,6 +236,61 @@ class ConversationService:
             await unit_of_work.commit()
             return persisted
 
+    async def commit_turn(
+        self,
+        session_id: UUID,
+        messages: tuple[Message, ...],
+        *,
+        expected_session_updated_at: datetime,
+    ) -> tuple[ConversationMessage, ...]:
+        """把一轮完整 Agent 对话作为一笔事务写入数据库。
+
+        Args:
+            session_id: 本轮对话所属的持久化会话 ID。
+            messages: 仅包含本轮新增消息，必须从 ``user`` 开始，以不含工具调用的
+                最终 ``assistant`` 回答结束；中间可以包含多组 assistant/tool 消息。
+            expected_session_updated_at: Agent 组装上下文时看到的会话更新时间。
+
+        Returns:
+            已由 Repository 分配连续序号和数据库主键的本轮消息。
+
+        Raises:
+            ConversationHistoryError: 消息不是一轮完整、合法的工具调用协议。
+            ConversationConflictError: 模型推理期间同一会话已被其他请求更新。
+
+        模型调用和工具执行可能耗时数秒，不能在此期间长期占用数据库事务。因此 Agent
+        先在内存中完成整轮推理，成功后再调用本方法短暂写库。任意一条写入失败时，
+        Memory Unit of Work 会回滚整笔事务，数据库不会留下孤立的 user 或 tool 消息。
+        """
+
+        if not _validate_turn(messages):
+            raise ConversationHistoryError("只能提交已经生成最终 assistant 回答的完整对话轮次")
+        if expected_session_updated_at.tzinfo is None or (
+            expected_session_updated_at.utcoffset() is None
+        ):
+            raise ValueError("expected_session_updated_at 必须包含时区")
+
+        now = self._current_time()
+        async with self._unit_of_work_factory() as unit_of_work:
+            current = await unit_of_work.conversations.get_session(session_id)
+            if current.updated_at != expected_session_updated_at:
+                raise ConversationConflictError(
+                    "Agent 推理期间会话已被其他请求更新，本轮结果未写入，请重新生成"
+                )
+            self._ensure_time_not_reversed(current, now)
+
+            persisted_messages: list[ConversationMessage] = []
+            for message in messages:
+                persisted_messages.append(
+                    await unit_of_work.conversations.append_message(
+                        session_id,
+                        message,
+                        created_at=now,
+                    )
+                )
+            await unit_of_work.commit()
+            return tuple(persisted_messages)
+
     async def load_window(self, session_id: UUID) -> ConversationWindow:
         """读取会话摘要和摘要覆盖位置之后的全部原始消息。"""
 
@@ -339,7 +394,7 @@ def _group_conversation_turns(
     return tuple(turns)
 
 
-def _validate_turn(messages: tuple[ConversationMessage, ...]) -> bool:
+def _validate_turn(messages: tuple[Message, ...]) -> bool:
     """验证一轮内 assistant/tool 协议，返回是否已有最终 assistant 回答。"""
 
     if not messages or messages[0].role is not MessageRole.USER:

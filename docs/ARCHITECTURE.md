@@ -430,5 +430,24 @@ user
 审计事件或候选记忆。未指定资产代码时只注入全局记忆；显式传入资产代码后才加入对应资产范围
 记忆。近期原始消息转换成基础 `Message` 后才交给 Provider，不暴露数据库 ID、序号和时间。
 
-下一小阶段将把持久化上下文接入 Agent 调用流程：一轮成功问答同时保存 user、assistant 和 tool
-消息，失败时不提交半截轮次，并为后续只读资产工具注册建立编排边界。
+### 11.3 持久化 Agent 的整轮提交
+
+`PersistentToolCallingAgent` 把 ContextAssembler 生成的历史接入模型—工具—模型循环，但不会在
+推理过程中逐条写数据库：
+
+```text
+ContextAssembler
+  → 旧上下文 + 本轮 user
+  → 模型 / ToolRegistry 循环（内存 working copy）
+  → 最终 assistant 回答
+  → ConversationService.commit_turn
+  → 同一事务保存本轮 user / assistant / tool / final assistant
+```
+
+模型失败、步数超限或提交中任意消息写入失败时，本轮消息全部不保存。可纠正的 ToolError 会先
+作为结构化 tool 消息反馈模型；只有模型最终完成回答后，这段纠错轨迹才随完整轮次落库。
+
+同一 Agent 实例使用每会话 `asyncio.Lock` 串行化请求，不阻塞其他会话；提交时再比较上下文读取时
+的 `session.updated_at`。如果其他进程已推进会话，旧上下文结果会以
+`ConversationConflictError` 失败，不会接到已经变化的历史之后。当前注册中心只允许无副作用的
+教学工具，下一小阶段再加入共享 Phase 7 SQLite 的只读资产查询工具。
