@@ -17,6 +17,14 @@ from finagent.persistence.memory_models import (
     MemoryEventRow,
     MemoryItemRow,
 )
+from finagent.persistence.memory_repositories import (
+    SqlAlchemyConversationRepository,
+    SqlAlchemyMemoryRepository,
+)
+from finagent.persistence.memory_unit_of_work import (
+    SqlAlchemyMemoryUnitOfWork,
+    SqlAlchemyMemoryUnitOfWorkFactory,
+)
 from finagent.persistence.models import (
     HoldingRow,
     LedgerTransactionRow,
@@ -39,6 +47,10 @@ __all__ = [
     "PurchaseLotRow",
     "PersistenceError",
     "SqlAlchemyLedgerTransactionRepository",
+    "SqlAlchemyConversationRepository",
+    "SqlAlchemyMemoryRepository",
+    "SqlAlchemyMemoryUnitOfWork",
+    "SqlAlchemyMemoryUnitOfWorkFactory",
     "SqlAlchemyPurchaseLotRepository",
     "UTCDateTime",
     "build_sqlite_url",

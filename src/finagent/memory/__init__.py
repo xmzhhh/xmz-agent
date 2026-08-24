@@ -4,6 +4,14 @@
 记忆抽取和上下文组装将在后续小阶段分别实现，避免领域规则与存储或模型厂商绑定。
 """
 
+from finagent.memory.errors import (
+    ConversationArchivedError,
+    ConversationConflictError,
+    ConversationNotFoundError,
+    MemoryConflictError,
+    MemoryDomainError,
+    MemoryItemNotFoundError,
+)
 from finagent.memory.models import (
     ConversationMessage,
     ConversationSession,
@@ -16,16 +24,28 @@ from finagent.memory.models import (
     MemoryStatus,
     MemoryType,
 )
+from finagent.memory.repository import ConversationRepository, MemoryRepository
+from finagent.memory.unit_of_work import MemoryUnitOfWork, MemoryUnitOfWorkFactory
 
 __all__ = [
     "ConversationMessage",
+    "ConversationArchivedError",
+    "ConversationConflictError",
+    "ConversationNotFoundError",
+    "ConversationRepository",
     "ConversationSession",
     "ConversationStatus",
     "MemoryActor",
+    "MemoryConflictError",
+    "MemoryDomainError",
     "MemoryEvent",
     "MemoryEventType",
     "MemoryItem",
+    "MemoryItemNotFoundError",
+    "MemoryRepository",
     "MemoryScopeType",
     "MemoryStatus",
     "MemoryType",
+    "MemoryUnitOfWork",
+    "MemoryUnitOfWorkFactory",
 ]

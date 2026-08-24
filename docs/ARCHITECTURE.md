@@ -351,7 +351,8 @@ Alembic 创建正式表结构，再让三份先后启动的 FastAPI 应用连接
 
 ## 11. Agent 结构化记忆的数据基础
 
-Phase 8 第一小阶段先建立记忆的领域模型和数据库边界，尚未让模型自动写记忆：
+Phase 8 前两个小阶段已经建立记忆领域模型、数据库结构和事务化 Repository，尚未让模型自动
+写入长期记忆：
 
 ```text
 chat_sessions ──< chat_messages
@@ -359,6 +360,14 @@ chat_sessions ──< chat_messages
       └────来源──── memory_items ──版本替换──> memory_items
                               │
                               └── memory_events（不保存正文的审计事件）
+
+MemoryService（下一小阶段）
+      ↓ 依赖协议
+MemoryUnitOfWork
+      ├── ConversationRepository
+      └── MemoryRepository
+              ↓
+      同一个 AsyncSession / SQLite 事务
 ```
 
 - `chat_sessions` 与 `chat_messages` 构成单会话短期记忆；会话可以跨重启恢复，但不会默认注入
@@ -369,6 +378,12 @@ chat_sessions ──< chat_messages
   静默覆盖。
 - `memory_events` 不外键依赖记忆正文，使用户硬删除 value 后仍能保留不含敏感内容的操作审计。
 - 会话摘要只是短期上下文压缩，不会绕过确认流程自动升级为长期记忆。
+- `ConversationRepository.append_message` 在事务内分配连续序号，并由会话唯一约束兜底；调用方
+  不需要理解数据库编号。
+- `SqlAlchemyMemoryUnitOfWork` 让消息、记忆正文和审计事件一起提交或回滚，但不会把资产面板
+  Repository 混入记忆服务边界。两个模块只复用同一个 `DatabaseManager` 和 SQLite 文件。
+- Repository 使用稳定 JSON 保存工具调用、记忆值和审计详情；读取时重新经过 Pydantic 领域模型
+  校验，损坏数据会明确失败，不会静默变成空内容。
 
-后续 Repository 与 MemoryService 将在同一异步 SQLite 基础上实现会话追加、候选确认、TTL
-和冲突更新；Agent 只读取 ACTIVE 且未过期的记忆。
+下一小阶段由 MemoryService 实现候选确认、拒绝、冲突替换、TTL 与审计详情白名单；Agent 最终
+只读取 ACTIVE 且未过期的记忆。
