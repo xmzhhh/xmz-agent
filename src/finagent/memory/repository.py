@@ -74,6 +74,11 @@ class ConversationRepository(Protocol):
 
         ...
 
+    async def get_message(self, message_id: UUID) -> ConversationMessage:
+        """按消息 UUID 读取来源消息。"""
+
+        ...
+
 
 class MemoryRepository(Protocol):
     """长期记忆正文与不含正文的审计事件访问接口。"""
@@ -93,6 +98,7 @@ class MemoryRepository(Protocol):
         *,
         status: MemoryStatus | None = None,
         memory_type: MemoryType | None = None,
+        memory_key: str | None = None,
         scope_type: MemoryScopeType | None = None,
         scope_id: str | None = None,
     ) -> tuple[MemoryItem, ...]:

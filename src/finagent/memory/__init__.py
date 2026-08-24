@@ -4,13 +4,25 @@
 记忆抽取和上下文组装将在后续小阶段分别实现，避免领域规则与存储或模型厂商绑定。
 """
 
+from finagent.memory.commands import (
+    MemoryCandidateCreate,
+    MemoryConfirmationResult,
+    MemoryRejectionReason,
+)
 from finagent.memory.errors import (
     ConversationArchivedError,
     ConversationConflictError,
+    ConversationMessageNotFoundError,
     ConversationNotFoundError,
+    InvalidMemoryTransitionError,
+    MemoryAuditError,
+    MemoryCandidateExpiredError,
+    MemoryClockError,
     MemoryConflictError,
     MemoryDomainError,
     MemoryItemNotFoundError,
+    MemorySourceError,
+    SensitiveMemoryError,
 )
 from finagent.memory.models import (
     ConversationMessage,
@@ -25,17 +37,25 @@ from finagent.memory.models import (
     MemoryType,
 )
 from finagent.memory.repository import ConversationRepository, MemoryRepository
+from finagent.memory.service import MemoryService
 from finagent.memory.unit_of_work import MemoryUnitOfWork, MemoryUnitOfWorkFactory
 
 __all__ = [
     "ConversationMessage",
     "ConversationArchivedError",
     "ConversationConflictError",
+    "ConversationMessageNotFoundError",
     "ConversationNotFoundError",
     "ConversationRepository",
     "ConversationSession",
     "ConversationStatus",
+    "InvalidMemoryTransitionError",
     "MemoryActor",
+    "MemoryAuditError",
+    "MemoryCandidateCreate",
+    "MemoryCandidateExpiredError",
+    "MemoryClockError",
+    "MemoryConfirmationResult",
     "MemoryConflictError",
     "MemoryDomainError",
     "MemoryEvent",
@@ -43,9 +63,13 @@ __all__ = [
     "MemoryItem",
     "MemoryItemNotFoundError",
     "MemoryRepository",
+    "MemoryRejectionReason",
     "MemoryScopeType",
     "MemoryStatus",
+    "MemoryService",
+    "MemorySourceError",
     "MemoryType",
     "MemoryUnitOfWork",
     "MemoryUnitOfWorkFactory",
+    "SensitiveMemoryError",
 ]

@@ -18,6 +18,7 @@ from finagent.llm import Message, MessageRole, ToolCall
 from finagent.memory.errors import (
     ConversationArchivedError,
     ConversationConflictError,
+    ConversationMessageNotFoundError,
     ConversationNotFoundError,
     MemoryConflictError,
     MemoryItemNotFoundError,
@@ -216,6 +217,14 @@ class SqlAlchemyConversationRepository:
         rows = (await self._session.scalars(statement)).all()
         return tuple(self._message_row_to_domain(row) for row in rows)
 
+    async def get_message(self, message_id: UUID) -> ConversationMessage:
+        """按消息 UUID 读取来源消息，不要求调用方先知道其会话。"""
+
+        row = await self._session.get(ChatMessageRow, message_id)
+        if row is None:
+            raise ConversationMessageNotFoundError(f"会话消息不存在：{message_id}")
+        return self._message_row_to_domain(row)
+
     async def _require_session_row(self, session_id: UUID) -> ChatSessionRow:
         """读取会话 ORM Row，并统一不存在时的异常类型。"""
 
@@ -301,6 +310,7 @@ class SqlAlchemyMemoryRepository:
         *,
         status: MemoryStatus | None = None,
         memory_type: MemoryType | None = None,
+        memory_key: str | None = None,
         scope_type: MemoryScopeType | None = None,
         scope_id: str | None = None,
     ) -> tuple[MemoryItem, ...]:
@@ -319,6 +329,8 @@ class SqlAlchemyMemoryRepository:
             statement = statement.where(MemoryItemRow.status == status.value)
         if memory_type is not None:
             statement = statement.where(MemoryItemRow.memory_type == memory_type.value)
+        if memory_key is not None:
+            statement = statement.where(MemoryItemRow.memory_key == memory_key)
         if scope_type is not None:
             statement = statement.where(MemoryItemRow.scope_type == scope_type.value)
             statement = statement.where(MemoryItemRow.scope_id == (normalized_scope_id or ""))

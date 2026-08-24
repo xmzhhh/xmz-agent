@@ -361,7 +361,7 @@ chat_sessions ──< chat_messages
                               │
                               └── memory_events（不保存正文的审计事件）
 
-MemoryService（下一小阶段）
+MemoryService（确定性状态机）
       ↓ 依赖协议
 MemoryUnitOfWork
       ├── ConversationRepository
@@ -384,6 +384,14 @@ MemoryUnitOfWork
   Repository 混入记忆服务边界。两个模块只复用同一个 `DatabaseManager` 和 SQLite 文件。
 - Repository 使用稳定 JSON 保存工具调用、记忆值和审计详情；读取时重新经过 Pydantic 领域模型
   校验，损坏数据会明确失败，不会静默变成空内容。
+- 模型输出只能解析为不含 `status` 的 `MemoryCandidateCreate`。候选必须来源于真实 user 消息，
+  经过凭据字段过滤后才能保存；只有显式用户确认方法能够产生 ACTIVE 状态。
+- 确认同身份新候选时，旧 ACTIVE 与新版本在一个事务中分别迁移为 SUPERSEDED 和 ACTIVE；
+  `version` 与 `supersedes_id` 保留完整历史，即使上一版本已自然过期也不会从 version 1 重算。
+- TTL 从候选创建的服务端时间开始计算；`expires_at <= now` 即视为到期。读取 Agent 可用记忆时
+  会先把到期 ACTIVE 项迁移为 EXPIRED，因此候选、拒绝、过期和删除内容都不会进入上下文。
+- 敏感过滤递归检查结构化字段名与明显凭据标签，错误消息不回显正文。审计事件只允许版本号、
+  状态、原因代码、是否过期和关联 UUID 等白名单字段，不接收模型自由文本。
 
-下一小阶段由 MemoryService 实现候选确认、拒绝、冲突替换、TTL 与审计详情白名单；Agent 最终
-只读取 ACTIVE 且未过期的记忆。
+下一小阶段将实现会话应用服务和上下文组装：恢复会话、选取近期消息、管理滚动摘要，并把 ACTIVE
+且未过期的长期记忆以清晰边界注入模型请求。
