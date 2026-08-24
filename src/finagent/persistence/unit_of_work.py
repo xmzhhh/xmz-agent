@@ -20,7 +20,7 @@ from finagent.persistence.repositories import (
 from finagent.portfolio.catalog import DEFAULT_ASSET_CATALOG, AssetCatalog
 from finagent.portfolio.repository import HoldingRepository
 
-CURRENT_SCHEMA_REVISION = "20260817_01"
+CURRENT_SCHEMA_REVISION = "20260824_01"
 
 
 class SqlAlchemyDashboardUnitOfWork:

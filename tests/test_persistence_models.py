@@ -1,4 +1,4 @@
-"""ORM 模型和首份 Alembic 迁移的集成测试。
+"""ORM 模型和完整 Alembic 迁移链的集成测试。
 
 测试数据库全部位于 pytest 临时目录。迁移测试验证空数据库的升级、降级和再次升级；ORM
 测试验证 Decimal、UTC 时间和外键约束在真实 SQLite 文件中的行为，防止只检查 Python
@@ -19,10 +19,14 @@ from sqlalchemy.exc import IntegrityError
 
 from finagent.persistence import (
     Base,
+    ChatMessageRow,
+    ChatSessionRow,
     DatabaseManager,
     HoldingRow,
     LedgerTransactionRow,
     ManualPriceRow,
+    MemoryEventRow,
+    MemoryItemRow,
     PurchaseLotRow,
 )
 
@@ -32,6 +36,10 @@ BUSINESS_TABLES = {
     "manual_prices",
     "ledger_transactions",
     "purchase_lots",
+    "chat_sessions",
+    "chat_messages",
+    "memory_items",
+    "memory_events",
 }
 
 
@@ -78,11 +86,11 @@ def test_metadata_registers_all_persistence_tables() -> None:
     assert set(Base.metadata.tables) == BUSINESS_TABLES
 
 
-def test_initial_migration_can_upgrade_downgrade_and_upgrade_again(
+def test_migration_chain_can_upgrade_downgrade_and_upgrade_again(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """首份迁移必须支持从空库安装、完全回退以及重新安装。"""
+    """完整迁移链必须支持从空库安装、完全回退以及重新安装。"""
 
     database_path = tmp_path / "migration-cycle.db"
     config = _alembic_config(database_path, monkeypatch)
@@ -97,7 +105,7 @@ def test_initial_migration_can_upgrade_downgrade_and_upgrade_again(
             "PRAGMA index_list(ledger_transactions)"
         ).fetchall()
 
-    assert revision == ("20260817_01",)
+    assert revision == ("20260824_01",)
     assert any(
         row[2] == "ledger_transactions"
         and row[3] == "opening_transaction_id"
@@ -237,6 +245,125 @@ async def test_purchase_lot_rejects_unknown_opening_transaction(
                             original_quantity=Decimal("1"),
                             remaining_quantity=Decimal("1"),
                             unit_cost=Decimal("3.8"),
+                        )
+                    )
+    finally:
+        await manager.close()
+
+
+async def test_memory_rows_round_trip_and_active_identity_is_unique(
+    migrated_database_path: Path,
+) -> None:
+    """会话来源、UTC 时间和同键 ACTIVE 唯一约束必须在真实 SQLite 中生效。"""
+
+    manager = DatabaseManager(migrated_database_path)
+    session_id = uuid4()
+    message_id = uuid4()
+    memory_id = uuid4()
+    source_time = datetime(
+        2026,
+        8,
+        24,
+        18,
+        0,
+        tzinfo=timezone(timedelta(hours=8)),
+    )
+    expected_utc_time = datetime(2026, 8, 24, 10, 0, tzinfo=UTC)
+
+    try:
+        async with manager.session() as session:
+            async with session.begin():
+                session.add(
+                    ChatSessionRow(
+                        id=session_id,
+                        title="持仓风险讨论",
+                        status="active",
+                        summary=None,
+                        summary_until_sequence=0,
+                        created_at=source_time,
+                        updated_at=source_time,
+                    )
+                )
+
+        # ORM Row 没有定义对象 relationship，因此测试显式先提交父会话，再写入带外键的消息；
+        # 后续 Repository 也会按这个顺序持久化，不能依赖 add_all 猜测跨 Mapper 插入顺序。
+        async with manager.session() as session:
+            async with session.begin():
+                session.add(
+                    ChatMessageRow(
+                        id=message_id,
+                        session_id=session_id,
+                        sequence_number=1,
+                        role="user",
+                        content="请记住黄金仓位最多 30%。",
+                        tool_calls_json="[]",
+                        created_at=source_time,
+                    )
+                )
+
+        async with manager.session() as session:
+            async with session.begin():
+                session.add_all(
+                    (
+                        MemoryItemRow(
+                            id=memory_id,
+                            memory_type="constraint",
+                            memory_key="max_gold_position_percent",
+                            value_json='{"percent":"30"}',
+                            scope_type="global",
+                            scope_id="",
+                            status="active",
+                            source_session_id=session_id,
+                            source_message_id=message_id,
+                            version=1,
+                            confirmed_at=source_time,
+                            created_at=source_time,
+                            updated_at=source_time,
+                        ),
+                        MemoryEventRow(
+                            memory_id=memory_id,
+                            event_type="confirmed",
+                            actor="user",
+                            details_json='{"version":1}',
+                            occurred_at=source_time,
+                        ),
+                    )
+                )
+
+        async with manager.session() as session:
+            stored_session = await session.get(ChatSessionRow, session_id)
+            stored_message = await session.get(ChatMessageRow, message_id)
+            stored_memory = await session.get(MemoryItemRow, memory_id)
+            events = (
+                await session.execute(
+                    select(MemoryEventRow).where(MemoryEventRow.memory_id == memory_id)
+                )
+            ).scalars().all()
+
+        assert stored_session is not None
+        assert stored_session.created_at == expected_utc_time
+        assert stored_message is not None
+        assert stored_message.content == "请记住黄金仓位最多 30%。"
+        assert stored_memory is not None
+        assert stored_memory.source_message_id == message_id
+        assert stored_memory.confirmed_at == expected_utc_time
+        assert len(events) == 1
+
+        async with manager.session() as session:
+            with pytest.raises(IntegrityError):
+                async with session.begin():
+                    session.add(
+                        MemoryItemRow(
+                            memory_type="constraint",
+                            memory_key="max_gold_position_percent",
+                            value_json='{"percent":"20"}',
+                            scope_type="global",
+                            scope_id="",
+                            status="active",
+                            version=2,
+                            confirmed_at=source_time,
+                            created_at=source_time,
+                            updated_at=source_time,
                         )
                     )
     finally:

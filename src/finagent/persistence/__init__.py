@@ -11,6 +11,12 @@ from finagent.persistence.ledger_repositories import (
     SqlAlchemyLedgerTransactionRepository,
     SqlAlchemyPurchaseLotRepository,
 )
+from finagent.persistence.memory_models import (
+    ChatMessageRow,
+    ChatSessionRow,
+    MemoryEventRow,
+    MemoryItemRow,
+)
 from finagent.persistence.models import (
     HoldingRow,
     LedgerTransactionRow,
@@ -21,11 +27,15 @@ from finagent.persistence.models import (
 
 __all__ = [
     "Base",
+    "ChatMessageRow",
+    "ChatSessionRow",
     "DatabaseManager",
     "DatabaseSchemaError",
     "HoldingRow",
     "LedgerTransactionRow",
     "ManualPriceRow",
+    "MemoryEventRow",
+    "MemoryItemRow",
     "PurchaseLotRow",
     "PersistenceError",
     "SqlAlchemyLedgerTransactionRepository",

@@ -45,6 +45,7 @@ FinAgent 不只是一个“接上大模型的聊天页面”。最终版本会�
 - [真实行情多数据源路由学习日记](docs/learning-journal/08-market-data-routing.md)
 - [模拟持仓管理与资产面板学习日记](docs/learning-journal/09-portfolio-dashboard.md)
 - [SQLite 持久化与交易账本学习日记](docs/learning-journal/10-persistence-ledger.md)
+- [Agent 结构化记忆与只读资产工具学习日记](docs/learning-journal/11-agent-memory.md)
 - [Phase 6 验收手册](docs/PHASE6_ACCEPTANCE.md)
 - [Phase 7 验收手册](docs/PHASE7_ACCEPTANCE.md)
 
@@ -60,7 +61,7 @@ FinAgent 不只是一个“接上大模型的聊天页面”。最终版本会�
 - [x] 第 2 阶段（第四部分）：真实行情多数据源路由
 - [x] 第 2 阶段（第五部分）：模拟持仓管理与资产面板
 - [x] 第 3 阶段（第一部分）：SQLite 持久化、交易账本与网页交易流程
-- [ ] 第 3 阶段（第二部分）：Agent 结构化记忆
+- [ ] 第 3 阶段（第二部分）：Agent 结构化记忆（进行中，Issue #17）
 - [ ] 第 4 阶段：RAG 与引用
 - [ ] 第 5 阶段：上下文工程与可靠工作流
 - [ ] 第 6 阶段：本地模型与模型路由
