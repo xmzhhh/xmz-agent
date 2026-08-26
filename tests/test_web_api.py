@@ -109,6 +109,7 @@ async def test_dashboard_page_and_static_assets_are_served() -> None:
         page = await client.get("/")
         stylesheet = await client.get("/static/dashboard.css")
         script = await client.get("/static/dashboard.js")
+        agent_script = await client.get("/static/agent-chat.js")
 
     assert page.status_code == 200
     assert page.headers["content-type"].startswith("text/html")
@@ -120,8 +121,15 @@ async def test_dashboard_page_and_static_assets_are_served() -> None:
     assert 'id="sell-form"' in page.text
     assert 'id="transactions-body"' in page.text
     assert 'id="positions-body"' in page.text
+    assert 'id="agent-workspace"' in page.text
+    assert 'id="session-form"' in page.text
+    assert 'id="chat-messages"' in page.text
+    assert 'id="chat-form"' in page.text
+    assert 'id="memory-candidates"' in page.text
+    assert 'id="active-memories"' in page.text
     assert "/static/dashboard.css" in page.text
     assert "/static/dashboard.js" in page.text
+    assert "/static/agent-chat.js" in page.text
 
     assert stylesheet.status_code == 200
     assert stylesheet.headers["content-type"].startswith("text/css")
@@ -134,6 +142,16 @@ async def test_dashboard_page_and_static_assets_are_served() -> None:
     assert 'apiRequest("/transactions/sell-preview"' in script.text
     # 外部行情来源通过 textContent 写入，防止把 Provider 文本作为 HTML 执行。
     assert ".innerHTML" not in script.text
+
+    assert agent_script.status_code == 200
+    assert "javascript" in agent_script.headers["content-type"]
+    assert 'agentApiRequest("/agent/sessions?status=active")' in agent_script.text
+    assert 'agentApiRequest("/memories/candidates")' in agent_script.text
+    assert 'body: JSON.stringify({message, asset_symbols: assetSymbols})' in agent_script.text
+    assert "get_portfolio_snapshot" not in agent_script.text
+    assert 'agentApiRequest("/holdings"' not in agent_script.text
+    # 模型回答、工具结果和记忆 value 全部使用 textContent，不允许注入可执行 HTML。
+    assert ".innerHTML" not in agent_script.text
 
 
 async def test_holding_crud_uses_decimal_strings_and_consistent_not_found_error() -> None:

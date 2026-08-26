@@ -67,6 +67,113 @@
             </div>
         </section>
 
+        <section id="agent-workspace" class="section-block agent-workspace" aria-labelledby="agent-title">
+            <div class="section-heading">
+                <div>
+                    <p class="section-kicker">Persistent agent</p>
+                    <h2 id="agent-title">AI 资产助手</h2>
+                </div>
+                <span class="status-badge status-read-only">只读工具 · 人工确认记忆</span>
+            </div>
+
+            <p class="section-intro">
+                AI 可以读取当前组合、单项持仓和交易账本，但不能修改持仓或执行交易。
+                对话保存在本地 SQLite；模型提出的长期记忆必须由你单独确认。
+            </p>
+
+            <div id="agent-message" class="message" role="status" aria-live="polite" hidden></div>
+
+            <div class="agent-layout">
+                <aside class="agent-sidebar" aria-labelledby="session-title">
+                    <div class="panel-heading compact-heading">
+                        <div>
+                            <p class="section-kicker">Sessions</p>
+                            <h3 id="session-title">会话</h3>
+                        </div>
+                    </div>
+
+                    <form id="session-form" class="session-form">
+                        <label for="session-name">新会话标题</label>
+                        <div class="inline-form-row">
+                            <input id="session-name" name="title" type="text" maxlength="120"
+                                   placeholder="例如：今日资产复盘" required>
+                            <button id="session-create-button" class="button button-primary" type="submit">
+                                新建
+                            </button>
+                        </div>
+                    </form>
+
+                    <label for="session-list">已有会话</label>
+                    <select id="session-list" class="session-list" size="6" aria-describedby="session-help">
+                        <option value="">暂无会话</option>
+                    </select>
+                    <p id="session-help" class="field-help">页面刷新后自动恢复最近使用的会话。</p>
+                    <button id="session-delete-button" class="button button-danger button-wide"
+                            type="button" disabled>
+                        删除当前会话
+                    </button>
+                </aside>
+
+                <div class="chat-panel" aria-labelledby="conversation-title">
+                    <div class="panel-heading compact-heading">
+                        <div>
+                            <p class="section-kicker">Conversation</p>
+                            <h3 id="conversation-title">对话记录</h3>
+                        </div>
+                        <span id="chat-session-meta" class="section-meta">请先新建或选择会话</span>
+                    </div>
+
+                    <div id="chat-messages" class="chat-messages" aria-live="polite">
+                        <p class="empty-copy">选择会话后即可开始对话。</p>
+                    </div>
+
+                    <form id="chat-form" class="chat-form">
+                        <label for="chat-input">发送给 AI</label>
+                        <textarea id="chat-input" name="message" rows="4" maxlength="20000"
+                                  placeholder="例如：分析我当前组合的仓位和净收益，并说明行情来源"
+                                  required disabled></textarea>
+
+                        <div class="chat-options-row">
+                            <div>
+                                <label for="agent-asset-symbols">相关资产范围（可选）</label>
+                                <select id="agent-asset-symbols" name="asset_symbols" multiple size="2">
+                                    <option value="017811">东方人工智能主题混合C（017811）</option>
+                                    <option value="JD-ZS-GOLD">京东金融浙商银行积存金</option>
+                                </select>
+                                <p class="field-help">仅控制哪些资产范围长期记忆进入上下文，不会限制工具查询。</p>
+                            </div>
+                            <button id="chat-submit-button" class="button button-primary" type="submit" disabled>
+                                发送
+                            </button>
+                        </div>
+                    </form>
+                </div>
+
+                <aside class="memory-panel" aria-labelledby="memory-title">
+                    <div class="panel-heading compact-heading">
+                        <div>
+                            <p class="section-kicker">Memory control</p>
+                            <h3 id="memory-title">长期记忆</h3>
+                        </div>
+                        <button id="memory-refresh-button" class="text-button" type="button">刷新</button>
+                    </div>
+
+                    <div class="memory-group">
+                        <h4>等待确认</h4>
+                        <div id="memory-candidates" class="memory-list">
+                            <p class="empty-copy">暂无候选记忆。</p>
+                        </div>
+                    </div>
+                    <div class="memory-group">
+                        <h4>已生效</h4>
+                        <div id="active-memories" class="memory-list">
+                            <p class="empty-copy">暂无已确认记忆。</p>
+                        </div>
+                    </div>
+                </aside>
+            </div>
+        </section>
+
         <section class="workspace-grid" aria-label="持仓录入与参考信息">
             <article class="panel form-panel">
                 <div class="panel-heading">
@@ -420,5 +527,6 @@
 </div>
 
 <script src="{{ url_for('static', path='/dashboard.js') }}" defer></script>
+<script src="{{ url_for('static', path='/agent-chat.js') }}" defer></script>
 </body>
 </html>

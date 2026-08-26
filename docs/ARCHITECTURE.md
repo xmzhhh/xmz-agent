@@ -520,3 +520,33 @@ Application Service 统一关闭它。行情 Service 和 SQLite 由 Dashboard �
 没有 `LLM_API_KEY` 时，组合根不创建百炼客户端。资产面板、会话 CRUD 和记忆管理仍可启动，只有
 chat API 返回 503；这让离线使用与模型配置故障不会互相绑死。自动测试注入 Fake Provider 和临时
 SQLite，验证工具轨迹、回答、候选和用户状态动作，全程不访问任何真实外部接口。
+
+### 11.6 网页聊天控制器
+
+资产页面额外加载独立的 `agent-chat.js`。它使用立即执行函数隔离浏览器状态，不依赖
+`dashboard.js` 内部变量，也不复制后端 Agent 或记忆状态机：
+
+```text
+页面加载
+  ├── GET /assets → 动态生成资产范围选项
+  ├── GET /agent/sessions → 恢复最近使用的会话
+  ├── GET /agent/sessions/{id}/messages → 重建完整消息和工具轨迹
+  └── GET /memories/candidates + ?status=active → 记忆控制区
+
+发送消息
+  → POST /agent/sessions/{id}/chat
+  → 成功后重新读取 SQLite 权威消息序列
+  → 刷新候选与 ACTIVE 记忆
+```
+
+浏览器 `localStorage` 只保存最后选中的会话 UUID，不保存消息、工具结果或记忆正文。刷新页面时
+真正的内容始终从 SQLite API 恢复。模型消息、工具参数、工具结果和结构化记忆均使用
+`textContent` 写入 DOM，不使用 `innerHTML`，防止外部行情或模型文本被当成可执行 HTML。
+
+assistant 的工具请求和 tool 结果使用折叠的 `<details>` 显示，让用户可以审计实际调用名称与
+JSON 数据，又不淹没最终自然语言回答。确认、拒绝和删除按钮分别调用独立记忆 API；聊天输入不
+存在隐式触发这些动作的代码路径。
+
+当前采用普通请求—响应而不是流式输出。一次 HTTP 响应只有在主 Agent 已形成最终回答、整轮消息
+已提交且候选抽取已完成后才返回，因此页面不会显示实际上尚未持久化的半成品。后续增加 SSE 时，
+需要区分仅用于显示的 token 事件与最终 commit 事件，不能因为“看起来更快”破坏事务语义。

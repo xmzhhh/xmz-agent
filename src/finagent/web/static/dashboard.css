@@ -37,7 +37,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
     font: inherit;
 }
 
@@ -156,7 +157,8 @@ h4 {
 .button:focus-visible,
 .text-button:focus-visible,
 input:focus-visible,
-select:focus-visible {
+select:focus-visible,
+textarea:focus-visible {
     outline: 3px solid rgb(20 108 90 / 22%);
     outline-offset: 2px;
 }
@@ -270,6 +272,13 @@ select:focus-visible {
     background: var(--danger-soft);
 }
 
+.message-warning,
+.message-loading {
+    color: #664a18;
+    border-color: #e6d6b4;
+    background: var(--gold-soft);
+}
+
 .section-block,
 .panel {
     border: 1px solid var(--line);
@@ -300,6 +309,255 @@ select:focus-visible {
 .section-intro {
     color: var(--ink-soft);
     font-size: 13px;
+}
+
+.status-read-only {
+    color: var(--accent);
+    background: var(--accent-soft);
+}
+
+.agent-layout {
+    display: grid;
+    grid-template-columns: minmax(220px, 260px) minmax(420px, 1fr) minmax(260px, 320px);
+    gap: 16px;
+    align-items: stretch;
+}
+
+.agent-sidebar,
+.chat-panel,
+.memory-panel {
+    min-width: 0;
+    padding: 18px;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    background: #faf8f2;
+}
+
+.compact-heading {
+    margin-bottom: 14px;
+}
+
+.session-form {
+    display: grid;
+    gap: 9px;
+    margin-bottom: 16px;
+}
+
+.inline-form-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+}
+
+.session-list {
+    width: 100%;
+    height: 168px;
+    min-height: 168px;
+    padding: 6px;
+}
+
+.session-list option {
+    padding: 9px 8px;
+    border-radius: 7px;
+    white-space: normal;
+}
+
+.chat-panel {
+    display: flex;
+    flex-direction: column;
+    min-height: 640px;
+}
+
+.chat-messages {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 320px;
+    max-height: 610px;
+    margin-bottom: 16px;
+    padding: 14px;
+    overflow-y: auto;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: white;
+    scroll-behavior: smooth;
+}
+
+.chat-message {
+    width: min(86%, 680px);
+    padding: 12px 14px;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    background: #f7f4ed;
+}
+
+.chat-message-user {
+    align-self: flex-end;
+    color: white;
+    border-color: var(--accent);
+    background: var(--accent);
+}
+
+.chat-message-assistant,
+.chat-message-tool {
+    align-self: flex-start;
+}
+
+.chat-message-tool {
+    width: min(94%, 760px);
+    border-style: dashed;
+    background: #f0eee8;
+}
+
+.chat-message-role {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    opacity: 0.8;
+}
+
+.chat-message-content {
+    margin-bottom: 8px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    line-height: 1.7;
+}
+
+.chat-message-time {
+    display: block;
+    margin-top: 7px;
+    font-size: 11px;
+    opacity: 0.68;
+}
+
+.tool-trace {
+    margin-top: 8px;
+    color: var(--ink);
+    border: 1px solid rgb(20 108 90 / 18%);
+    border-radius: 9px;
+    background: rgb(255 255 255 / 74%);
+}
+
+.tool-trace summary {
+    padding: 8px 10px;
+    cursor: pointer;
+    color: var(--accent-dark);
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.tool-trace pre,
+.memory-value {
+    max-height: 240px;
+    margin: 0;
+    padding: 10px;
+    overflow: auto;
+    border-top: 1px solid var(--line);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font: 12px/1.55 Consolas, "Microsoft YaHei UI", monospace;
+}
+
+.chat-form textarea,
+.chat-form select {
+    width: 100%;
+}
+
+.chat-form {
+    display: grid;
+    gap: 9px;
+}
+
+.chat-form textarea {
+    resize: vertical;
+    min-height: 104px;
+}
+
+.chat-options-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 12px;
+    align-items: end;
+    margin-top: 12px;
+}
+
+.chat-options-row .button {
+    min-width: 110px;
+    margin-bottom: 25px;
+}
+
+.memory-group + .memory-group {
+    margin-top: 20px;
+    padding-top: 18px;
+    border-top: 1px solid var(--line);
+}
+
+.memory-group h4 {
+    margin-bottom: 10px;
+}
+
+.memory-list {
+    display: grid;
+    gap: 10px;
+}
+
+.memory-card {
+    padding: 12px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: white;
+}
+
+.memory-card-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.memory-card-heading strong {
+    overflow-wrap: anywhere;
+    font-size: 13px;
+}
+
+.memory-type-badge {
+    flex: 0 0 auto;
+    padding: 3px 6px;
+    border-radius: 999px;
+    color: var(--accent-dark);
+    background: var(--accent-soft);
+    font-size: 10px;
+    font-weight: 700;
+}
+
+.memory-meta {
+    margin: 7px 0;
+    color: var(--ink-soft);
+    font-size: 11px;
+}
+
+.memory-value {
+    max-height: 150px;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    background: #faf8f2;
+}
+
+.memory-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 9px;
+}
+
+.memory-actions .button {
+    min-height: 32px;
+    padding: 6px 9px;
+    font-size: 12px;
 }
 
 .section-meta {
@@ -408,7 +666,8 @@ label {
 }
 
 input,
-select {
+select,
+textarea {
     width: 100%;
     min-height: 42px;
     padding: 9px 11px;
@@ -419,7 +678,8 @@ select {
 }
 
 input:disabled,
-select:disabled {
+select:disabled,
+textarea:disabled {
     color: var(--ink-soft);
     background: #efede7;
 }
@@ -629,6 +889,18 @@ footer {
 }
 
 @media (max-width: 1100px) {
+    .agent-layout {
+        grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
+    }
+
+    .memory-panel {
+        grid-column: 1 / -1;
+    }
+
+    .memory-panel .memory-list {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
     .summary-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
@@ -684,8 +956,32 @@ footer {
     .workspace-grid,
     .ledger-grid,
     .analysis-grid,
-    .form-row {
+    .form-row,
+    .agent-layout,
+    .memory-panel .memory-list {
         grid-template-columns: 1fr;
+    }
+
+    .memory-panel {
+        grid-column: auto;
+    }
+
+    .chat-panel {
+        min-height: 560px;
+    }
+
+    .session-list {
+        height: 132px;
+        min-height: 132px;
+    }
+
+    .chat-options-row {
+        grid-template-columns: 1fr;
+    }
+
+    .chat-options-row .button {
+        width: 100%;
+        margin-bottom: 0;
     }
 
     .reference-panel {
@@ -710,6 +1006,15 @@ footer {
     .brand-mark {
         width: 42px;
         height: 42px;
+    }
+
+    .inline-form-row {
+        grid-template-columns: 1fr;
+    }
+
+    .chat-message,
+    .chat-message-tool {
+        width: 100%;
     }
 }
 
