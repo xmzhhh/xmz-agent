@@ -14,6 +14,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from finagent.agents import AgentApplicationService, AgentError
 from finagent.core.config import Settings, get_settings
 from finagent.dashboard import (
     DashboardSnapshot,
@@ -46,6 +47,26 @@ from finagent.ledger import (
     TransactionService,
     UntrackedHoldingError,
 )
+from finagent.llm import (
+    ModelAuthenticationError,
+    ModelConnectionError,
+    ModelProviderError,
+    ModelRateLimitError,
+    ModelResponseError,
+    ModelTimeoutError,
+)
+from finagent.memory import (
+    ConversationArchivedError,
+    ConversationConflictError,
+    ConversationMessageNotFoundError,
+    ConversationNotFoundError,
+    ConversationService,
+    InvalidMemoryTransitionError,
+    MemoryCandidateExpiredError,
+    MemoryDomainError,
+    MemoryItemNotFoundError,
+    MemoryService,
+)
 from finagent.portfolio import (
     AssetDefinition,
     AssetNotHoldableError,
@@ -59,6 +80,7 @@ from finagent.portfolio import (
     PortfolioError,
     UnsupportedAssetError,
 )
+from finagent.web.agent_api import AgentUnavailableError, create_agent_router
 from finagent.web.composition import build_application_services
 
 WEB_DIRECTORY = Path(__file__).resolve().parent
@@ -114,18 +136,38 @@ def create_app(
     settings: Settings | None = None,
     dashboard_service: PortfolioDashboardService | None = None,
     transaction_service: TransactionService | None = None,
+    conversation_service: ConversationService | None = None,
+    memory_service: MemoryService | None = None,
+    agent_service: AgentApplicationService | None = None,
 ) -> FastAPI:
-    """创建拥有显式存储初始化与关闭生命周期的 FastAPI 应用。"""
+    """创建拥有显式存储初始化、共享 Agent 和记忆接口的 FastAPI 应用。
+
+    生产入口省略全部 Service 参数，由组合根装配同一 SQLite。测试可以继续只注入旧资产
+    Service，也可以显式注入 Fake Agent 依赖，且不会读取开发者的 API Key。
+    """
 
     active_settings = settings or get_settings()
+    application_services = None
     active_transaction_service: TransactionService | None
+    active_conversation_service: ConversationService | None
+    active_memory_service: MemoryService | None
+    active_agent_service: AgentApplicationService | None
+    agent_unavailable_reason: str | None
     if dashboard_service is None:
-        services = build_application_services(active_settings)
-        service = services.dashboard
-        active_transaction_service = services.transactions
+        application_services = build_application_services(active_settings)
+        service = application_services.dashboard
+        active_transaction_service = application_services.transactions
+        active_conversation_service = application_services.conversations
+        active_memory_service = application_services.memories
+        active_agent_service = application_services.agent
+        agent_unavailable_reason = application_services.agent_unavailable_reason
     else:
         service = dashboard_service
         active_transaction_service = transaction_service
+        active_conversation_service = conversation_service
+        active_memory_service = memory_service
+        active_agent_service = agent_service
+        agent_unavailable_reason = None
 
     def require_transaction_service() -> TransactionService:
         """测试若只注入旧 Dashboard Service，访问交易端点时快速暴露装配错误。"""
@@ -138,11 +180,22 @@ def create_app(
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         """启动时检查存储，退出时沿 Service 链路释放数据库和 Provider。"""
 
-        try:
-            await service.initialize()
-            yield
-        finally:
-            await service.close()
+        if application_services is not None:
+            try:
+                await application_services.initialize()
+                yield
+            finally:
+                await application_services.close()
+        else:
+            try:
+                await service.initialize()
+                yield
+            finally:
+                try:
+                    if active_agent_service is not None:
+                        await active_agent_service.close()
+                finally:
+                    await service.close()
 
     app = FastAPI(
         title="FinAgent Portfolio Dashboard",
@@ -151,6 +204,9 @@ def create_app(
     )
     app.state.dashboard_service = service
     app.state.transaction_service = active_transaction_service
+    app.state.conversation_service = active_conversation_service
+    app.state.memory_service = active_memory_service
+    app.state.agent_service = active_agent_service
 
     # 静态目录和模板都位于 Python 包内部，安装 wheel 后仍能由同一应用入口提供。
     app.mount(
@@ -208,6 +264,83 @@ def create_app(
             else status.HTTP_503_SERVICE_UNAVAILABLE
         )
         return _error_response(status_code, error.__class__.__name__, str(error))
+
+    @app.exception_handler(AgentUnavailableError)
+    async def handle_agent_unavailable(
+        _request: Request,
+        error: AgentUnavailableError,
+    ) -> JSONResponse:
+        """缺少模型配置只影响聊天入口，不影响资产、会话和记忆管理。"""
+
+        return _error_response(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            error.__class__.__name__,
+            str(error),
+        )
+
+    @app.exception_handler(MemoryDomainError)
+    async def handle_memory_error(
+        _request: Request,
+        error: MemoryDomainError,
+    ) -> JSONResponse:
+        """把会话、记忆状态机异常映射为稳定 HTTP 语义。"""
+
+        if isinstance(
+            error,
+            (
+                ConversationNotFoundError,
+                ConversationMessageNotFoundError,
+                MemoryItemNotFoundError,
+            ),
+        ):
+            status_code = status.HTTP_404_NOT_FOUND
+        elif isinstance(
+            error,
+            (
+                ConversationArchivedError,
+                ConversationConflictError,
+                InvalidMemoryTransitionError,
+                MemoryCandidateExpiredError,
+            ),
+        ):
+            status_code = status.HTTP_409_CONFLICT
+        else:
+            status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
+        return _error_response(status_code, error.__class__.__name__, str(error))
+
+    @app.exception_handler(ModelProviderError)
+    async def handle_model_error(
+        _request: Request,
+        error: ModelProviderError,
+    ) -> JSONResponse:
+        """区分模型限流、超时、连接、鉴权和响应协议错误。"""
+
+        if isinstance(error, ModelRateLimitError):
+            status_code = status.HTTP_429_TOO_MANY_REQUESTS
+        elif isinstance(error, ModelTimeoutError):
+            status_code = status.HTTP_504_GATEWAY_TIMEOUT
+        elif isinstance(error, ModelConnectionError):
+            status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        elif isinstance(error, ModelAuthenticationError):
+            status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        elif isinstance(error, ModelResponseError):
+            status_code = status.HTTP_502_BAD_GATEWAY
+        else:
+            status_code = status.HTTP_502_BAD_GATEWAY
+        return _error_response(status_code, error.__class__.__name__, str(error))
+
+    @app.exception_handler(AgentError)
+    async def handle_agent_error(
+        _request: Request,
+        error: AgentError,
+    ) -> JSONResponse:
+        """Agent 无法在安全边界内形成最终回答时返回上游响应错误。"""
+
+        return _error_response(
+            status.HTTP_502_BAD_GATEWAY,
+            error.__class__.__name__,
+            str(error),
+        )
 
     router = APIRouter(prefix="/api/v1")
 
@@ -353,4 +486,13 @@ def create_app(
         return {"status": "ok", "market_data_mode": active_settings.market_data_mode}
 
     app.include_router(router)
+    if active_conversation_service is not None and active_memory_service is not None:
+        app.include_router(
+            create_agent_router(
+                active_conversation_service,
+                active_memory_service,
+                active_agent_service,
+                unavailable_reason=agent_unavailable_reason,
+            )
+        )
     return app

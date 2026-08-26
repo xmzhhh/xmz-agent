@@ -326,6 +326,50 @@ class MemoryService:
             await unit_of_work.commit()
             return rejected
 
+    async def get_memory(self, memory_id: UUID) -> MemoryItem:
+        """读取一条记忆；读取前先推进所有已到期 ACTIVE 状态。"""
+
+        await self.expire_due_memories()
+        async with self._unit_of_work_factory() as unit_of_work:
+            return await unit_of_work.memories.get_memory(memory_id)
+
+    async def list_memories(
+        self,
+        *,
+        status: MemoryStatus | None = None,
+        memory_type: MemoryType | None = None,
+        scope_type: MemoryScopeType | None = None,
+        scope_id: str | None = None,
+    ) -> tuple[MemoryItem, ...]:
+        """供管理界面查询记忆正文，包含候选、历史版本和非活动状态。
+
+        查询全部记忆或 ACTIVE 记忆前先执行到期迁移，保证 API 不会把时间上已经失效的项目
+        继续显示为 active。其他状态不可能因 TTL 自动变化，因此不额外开启写事务。
+        """
+
+        if status is None or status is MemoryStatus.ACTIVE:
+            await self.expire_due_memories()
+        async with self._unit_of_work_factory() as unit_of_work:
+            return await unit_of_work.memories.list_memories(
+                status=status,
+                memory_type=memory_type,
+                scope_type=scope_type,
+                scope_id=scope_id,
+            )
+
+    async def list_events(self, memory_id: UUID) -> tuple[MemoryEvent, ...]:
+        """返回一条记忆不含正文的完整审计事件，包括已硬删除记忆。"""
+
+        async with self._unit_of_work_factory() as unit_of_work:
+            events = await unit_of_work.memories.list_events(memory_id)
+            if events:
+                # 删除事件不含正文，因此用户删除 MemoryItem 后仍能验证系统确实执行过删除。
+                return events
+            # 正常创建候选时一定同时写入 candidate_created。没有任何事件时再读取正文，
+            # 让真正未知的 UUID 返回 404，而不是与合法但空审计的损坏数据混为一谈。
+            await unit_of_work.memories.get_memory(memory_id)
+            return ()
+
     async def list_active_memories(
         self,
         *,

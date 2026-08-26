@@ -67,3 +67,7 @@ class ConversationSummaryError(MemoryDomainError):
 
 class ConversationSummaryConflictError(MemoryDomainError):
     """摘要生成期间已有另一操作推进了摘要覆盖位置。"""
+
+
+class MemoryExtractionError(MemoryDomainError):
+    """模型的候选记忆输出为空、包含工具调用或不符合结构化协议。"""

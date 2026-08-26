@@ -30,9 +30,16 @@ from finagent.memory.errors import (
     MemoryClockError,
     MemoryConflictError,
     MemoryDomainError,
+    MemoryExtractionError,
     MemoryItemNotFoundError,
     MemorySourceError,
     SensitiveMemoryError,
+)
+from finagent.memory.extraction import (
+    MemoryCandidateDraft,
+    MemoryCandidateExtraction,
+    MemoryCandidateExtractor,
+    ModelMemoryCandidateExtractor,
 )
 from finagent.memory.models import (
     ConversationMessage,
@@ -71,11 +78,15 @@ __all__ = [
     "MemoryActor",
     "MemoryAuditError",
     "MemoryCandidateCreate",
+    "MemoryCandidateDraft",
+    "MemoryCandidateExtraction",
+    "MemoryCandidateExtractor",
     "MemoryCandidateExpiredError",
     "MemoryClockError",
     "MemoryConfirmationResult",
     "MemoryConflictError",
     "MemoryDomainError",
+    "MemoryExtractionError",
     "MemoryEvent",
     "MemoryEventType",
     "MemoryItem",
@@ -90,5 +101,6 @@ __all__ = [
     "MemoryUnitOfWork",
     "MemoryUnitOfWorkFactory",
     "ModelConversationSummarizer",
+    "ModelMemoryCandidateExtractor",
     "SensitiveMemoryError",
 ]

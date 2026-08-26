@@ -304,6 +304,21 @@ class ConversationService:
             _group_conversation_turns(messages)
             return ConversationWindow(session=session, recent_messages=messages)
 
+    async def list_messages(
+        self,
+        session_id: UUID,
+    ) -> tuple[ConversationMessage, ...]:
+        """返回会话的完整原始消息历史，不受滚动摘要覆盖位置影响。
+
+        Web/API 展示历史时必须读取原文，而不是只读取发给模型的近期窗口。读取后仍校验完整
+        user/assistant/tool 协议，避免把数据库损坏或绕过 Service 写入的残缺历史交给用户。
+        """
+
+        async with self._unit_of_work_factory() as unit_of_work:
+            messages = await unit_of_work.conversations.list_messages(session_id)
+            _group_conversation_turns(messages)
+            return messages
+
     async def refresh_summary(self, session_id: UUID) -> ConversationSession:
         """在不删除原始消息的前提下推进滚动摘要覆盖位置。
 

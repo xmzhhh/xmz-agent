@@ -477,9 +477,10 @@ system prompt、长期记忆正文或数据库内部事务对象。
 
 ## 当前验证结果
 
-- `uv run python -m pytest -q`：308 个测试通过；第六小阶段新增 6 个只读资产工具及 Agent 集成测试。
+- `uv run python -m pytest -q`：318 个测试通过；第七小阶段新增 10 个候选抽取与 Agent Web API
+  离线测试。
 - `uv run ruff check .`：通过。
-- `uv run mypy`：116 个源文件通过严格类型检查。
+- `uv run mypy`：121 个源文件通过严格类型检查。
 - Alembic：临时空数据库可以升级到 `20260824_01`、降级到 base、再次升级，并且
   metadata 与迁移保持一致。
 - `uv build`：成功生成当前 `0.3.0` 开发基线的源码包和 wheel；阶段结束时再统一更新为
@@ -487,8 +488,106 @@ system prompt、长期记忆正文或数据库内部事务对象。
 - `git diff --check`：通过；仅出现 Windows 行尾转换提示，没有空白错误。
 - 测试过程未访问真实行情、模型接口和个人 SQLite 数据库。
 
+## 第七小阶段：正式 Agent 组合根与 FastAPI 接口
+
+### 本小阶段目标
+
+- 把持久化会话、结构化记忆、只读资产工具和模型 Provider 装配成正式应用服务；
+- 让 FastAPI 创建、恢复、删除和继续同一 SQLite 中的会话；
+- 在一轮回答成功落库后生成至多一条结构化候选记忆；
+- 使用独立 API 查看、确认、拒绝和删除候选，模型不能直接改变长期记忆状态；
+- 缺少模型 Key 时保留离线资产、会话和记忆能力，只让聊天入口返回 503；
+- 所有自动测试使用 Fake 行情、Fake 模型和临时 SQLite，不消耗真实额度。
+
+### 为什么需要 `AgentApplicationService`
+
+`PersistentToolCallingAgent` 只关心上下文、模型工具循环和整轮消息提交；`MemoryService` 只关心
+确定性记忆状态机。如果 FastAPI 路由自己依次调用两者，CLI 将来还要复制同一套流程，异常降级
+规则也容易不一致。因此新增应用服务统一表达：
+
+```text
+Agent 完成回答并原子保存整轮消息
+  → 取刚刚落库的 user 消息作为可信来源
+  → 候选抽取器返回无 status、无来源 UUID 的草稿
+  → 应用服务补上可信来源
+  → MemoryService 校验敏感内容并保存 candidate
+```
+
+候选抽取位于回答提交之后，是因为模型已经成功回答这一事实不能被第二次辅助模型调用推翻。若
+抽取发生 JSON 错误、超时或连接故障，API 仍返回回答和 `memory_warning`；若主 Agent 本身失败，
+则沿用整轮回滚规则，不保存半轮消息。
+
+### 候选抽取协议如何限制模型权限
+
+`MemoryCandidateDraft` 只有类型、键、JSON 值、作用域和可选 TTL，没有 `status`、`version`、
+`confirmed_at` 或来源 UUID。`ModelMemoryCandidateExtractor` 使用 `tool_choice=none`、temperature 0
+和严格 JSON 根结构，每轮最多一条候选；普通即时问题应返回 `{"candidate":null}`。
+
+系统提示明确排除持仓、行情、收益、交易流水、账号和凭据。这不是唯一安全层：模型 JSON 还会
+经过 Pydantic 字段校验，应用服务补可信来源，最后由 `MemoryService` 再验证来源 user 消息和敏感
+内容。任何一层都不能直接产生 ACTIVE 状态。
+
+### 一个数据库为什么仍使用两个 Unit of Work
+
+组合根只创建一个 `DatabaseManager`，确保资产面板、账本、会话和记忆确实连接同一 SQLite 文件；
+但 Dashboard UoW 只暴露持仓/价格/流水/批次，Memory UoW 只暴露会话/记忆/事件。共享物理连接
+配置不等于合并业务事务边界，这使 Agent 读取资产时仍必须通过只读工具，而不能绕过 Service
+直接拿到所有 Repository。
+
+模型 Provider 则由主 Agent、滚动摘要器和候选抽取器共享，避免每个适配器各建连接池。关闭顺序
+由组合根统一规定：先关闭 Agent 拥有的模型客户端，再关闭行情与数据库资源。
+
+### FastAPI 端点与错误语义
+
+- `/api/v1/agent/sessions`：创建、列出和读取会话；`/{id}/messages` 恢复完整原始轨迹；
+- `/api/v1/agent/sessions/{id}/chat`：执行持久化只读 Agent 并返回可选候选；
+- `/api/v1/memories` 与 `/candidates`：组合筛选长期记忆和查看待确认项；
+- `/api/v1/memories/{id}/confirm|reject`：显式用户状态动作；
+- `/api/v1/memories/{id}`：读取或硬删除正文；`/{id}/events` 在正文删除后仍可返回最小审计。
+
+不存在的会话或记忆返回 404；归档、并发冲突和非法状态迁移返回 409；请求/记忆校验返回 422；
+模型限流、超时、连接失败分别映射 429、504、503，模型协议或 Agent 无最终回答返回 502。HTTP
+错误保持原有 `{"error":{"code":...,"message":...}}` 结构。
+
+### 本小阶段离线验证
+
+新增测试完成了以下闭环：主 Agent 先调用 `get_portfolio_snapshot`，再生成最终回答；四条
+user/assistant/tool/assistant 消息按序写入临时 SQLite；候选保持 candidate，直到独立确认接口
+把它变为 active。另有测试验证候选抽取失败不删除回答、拒绝和硬删除后正文返回 404 但审计事件
+仍存在，以及没有 `LLM_API_KEY` 时会话 API 可用而 chat 返回 503。
+
+## 本阶段问题记录（续）
+
+### 16. Git CMD 包装层再次破坏 `rg` 的引号和管道
+
+- 问题现象：用带括号、空格和管道的复合正则搜索类名时，`rg` 把模式片段解释为文件名并返回
+  Windows 路径语法错误。
+- 产生原因：命令字符串经过执行包装层和 `cmd.exe` 两次解析，正则中的引号与 `|` 没有按原意
+  传给 `rg`。
+- 排查思路：确认错误来自搜索命令而不是源码，再改用 PowerShell 单引号承载只读搜索表达式。
+- 解决方法：Git 操作仍固定使用 Git CMD；复杂只读源码搜索避免在 CMD 中拼接多层正则。
+- 学到的知识：Shell 选择也是输入边界设计，失败的诊断命令不能被误认为代码错误。
+
+### 17. 一个 apply_patch 同时删除并新增同一路径失败
+
+- 问题现象：尝试用同一补丁完整替换 `composition.py` 时，工具报告多个操作指向同一文件。
+- 产生原因：补丁同时包含 Delete File 和 Add File，补丁应用器禁止在一次事务内对相同路径声明
+  两种文件级操作。
+- 排查思路：检查失败发生在补丁校验阶段，因此原文件删除动作也没有部分执行。
+- 解决方法：先用独立补丁删除旧文件，再用第二个补丁新增完整内容，随后立即运行 Ruff 和 mypy。
+- 学到的知识：原子补丁失败后要先确认工作区状态；大文件替换应使用单个 Update 或分开的
+  Delete/Add，不能假设工具会自动合并文件级指令。
+
+### 18. 新增跨模块导入不符合 Ruff 排序
+
+- 问题现象：目标 mypy 通过，但 Ruff 报告 `agents/__init__.py` 和 `web/app.py` 的导入块未排序。
+- 产生原因：逐步加入 Agent、模型和记忆异常时，导入顺序不再符合项目统一规则。
+- 排查思路：确认只有 `I001`，没有未使用导入或类型错误。
+- 解决方法：只对两个目标文件执行 Ruff 自动整理导入，然后重新运行目标检查。
+- 学到的知识：跨层组合根很容易积累导入噪声；自动排序适合机械格式修复，但不应借机格式化
+  无关文件。
+
 ## 下一小阶段
 
-建立正式 Agent 应用组合根和 FastAPI 接口：让 Web 创建、恢复和继续会话，调用同一 SQLite 的
-持久化 Agent 与只读资产工具，并提供候选记忆查看、确认、拒绝和删除接口。模型仍只能提出候选，
-用户确认动作由独立 API 显式完成；CLI 接入和最终验收在随后的小阶段继续完成。
+让 `finagent chat` 与 Web Agent 共用正式组合根和同一 SQLite 会话，补充可在 PyCharm 运行的
+离线验收脚本，并完成 Phase 8 的 README、验收手册、学习日记、版本号和唯一 PR 收尾。

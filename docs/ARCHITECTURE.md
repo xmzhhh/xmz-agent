@@ -351,8 +351,8 @@ Alembic 创建正式表结构，再让三份先后启动的 FastAPI 应用连接
 
 ## 11. Agent 结构化记忆的数据基础
 
-Phase 8 前两个小阶段已经建立记忆领域模型、数据库结构和事务化 Repository，尚未让模型自动
-写入长期记忆：
+Phase 8 已建立记忆领域模型、数据库结构、事务化 Repository、上下文组装、持久化 Agent、
+只读资产工具与正式 FastAPI 接口。模型可以提出候选，但仍不能自动写入 ACTIVE 长期记忆：
 
 ```text
 chat_sessions ──< chat_messages
@@ -450,7 +450,7 @@ ContextAssembler
 同一 Agent 实例使用每会话 `asyncio.Lock` 串行化请求，不阻塞其他会话；提交时再比较上下文读取时
 的 `session.updated_at`。如果其他进程已推进会话，旧上下文结果会以
 `ConversationConflictError` 失败，不会接到已经变化的历史之后。当前注册中心只允许无副作用的
-教学工具，下一小阶段再加入共享 Phase 7 SQLite 的只读资产查询工具。
+只读资产工具；注册中心中不存在任何持仓或交易写入口。
 
 ### 11.4 只读资产工具白名单
 
@@ -474,3 +474,49 @@ PersistentToolCallingAgent
 账本工具不会向模型发送交易 UUID、数据库创建时间或自由文本备注。工具注册中心不包含持仓 CRUD、
 买入、卖出试算、确认卖出或自动交易能力。自动测试在执行工具前后比较持仓与流水，确保查询没有
 改变 SQLite 状态；Real 模式下组合工具仍可能只读访问外部行情源。
+
+### 11.5 正式 Agent 组合根与 HTTP 边界
+
+FastAPI 生产入口只调用一次 `build_application_services`。组合根创建一个
+`DatabaseManager`，再分别交给 Dashboard 和 Memory 两个 Unit of Work 工厂：
+
+```text
+FastAPI /api/v1
+  ├── 资产与交易 API → Dashboard / Transaction Service
+  ├── 会话 API → ConversationService
+  ├── 记忆管理 API → MemoryService
+  └── chat API → AgentApplicationService
+                    ├── PersistentToolCallingAgent
+                    │     ├── ContextAssembler
+                    │     ├── BailianModelProvider
+                    │     └── 三个只读资产工具
+                    └── ModelMemoryCandidateExtractor
+                              ↓
+                         candidate（等待用户决定）
+```
+
+主 Agent、滚动摘要器和候选抽取器共享同一个 `BailianModelProvider` 连接池，最外层 Agent
+Application Service 统一关闭它。行情 Service 和 SQLite 由 Dashboard 生命周期关闭，避免同一资源
+存在多个含糊的关闭者。
+
+候选抽取发生在完整回答成功落库之后，输入只包含本轮 user 原文和 assistant 最终回答，输出根节点
+必须是 `{"candidate": ...}`。草稿模型故意没有来源 UUID、状态、确认时间和版本；应用服务从刚刚
+持久化的 user 消息补上可信来源，再交给 `MemoryService` 做敏感过滤。抽取 JSON 或模型请求失败
+只返回 `memory_warning`，不会让已经保存的对话丢失或向用户谎报聊天失败。
+
+记忆状态修改使用独立 HTTP 动作，而不是聊天文字：
+
+| API | 用途 | 模型能否直接触发 |
+|---|---|---|
+| `POST /agent/sessions` | 创建持久化会话 | 否 |
+| `POST /agent/sessions/{id}/chat` | 执行只读 Agent 对话并尽力生成候选 | 用户发起 |
+| `GET /agent/sessions/{id}/messages` | 恢复完整会话历史 | 否 |
+| `GET /memories/candidates` | 查看等待决定的候选 | 否 |
+| `POST /memories/{id}/confirm` | 用户确认候选并处理版本替换 | 否 |
+| `POST /memories/{id}/reject` | 用户拒绝候选 | 否 |
+| `DELETE /memories/{id}` | 硬删除正文、保留最小审计 | 否 |
+| `GET /memories/{id}/events` | 查看不含正文的审计轨迹 | 否 |
+
+没有 `LLM_API_KEY` 时，组合根不创建百炼客户端。资产面板、会话 CRUD 和记忆管理仍可启动，只有
+chat API 返回 503；这让离线使用与模型配置故障不会互相绑死。自动测试注入 Fake Provider 和临时
+SQLite，验证工具轨迹、回答、候选和用户状态动作，全程不访问任何真实外部接口。
